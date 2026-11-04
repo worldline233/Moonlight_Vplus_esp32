@@ -2447,7 +2447,7 @@
 +HEADERS += ../../app/streaming/input/esp32inputstatus.h
 --- /dev/null
 +++ b/tests/esp32_mouse_bridge/main.cpp
-@@ -0,0 +1,564 @@
+@@ -0,0 +1,579 @@
 +#include "../../app/streaming/input/esp32mousebridge.h"
 +#include "../../app/settings/esp32inputsettings.h"
 +
@@ -2505,6 +2505,15 @@
 +                }
 +            });
 +        });
++    }
++
++    static int releaseCount(const QList<QJsonObject>& messages)
++    {
++        int count = 0;
++        for (const auto& message : messages) {
++            if (message.value("type") == QStringLiteral("release_all")) ++count;
++        }
++        return count;
 +    }
 +
 +    static QList<QJsonArray> mouseStates(const QList<QJsonObject>& messages)
@@ -2604,8 +2613,12 @@
 +        QVERIFY(mouseStates(messages).last().isEmpty());
 +        QVERIFY(bridge.handleKeyboard(5, true));
 +        QTRY_COMPARE(keyboardStates(messages).size(), 4);
++        const int releasesBefore = releaseCount(messages);
 +        bridge.releaseAll();
-+        QTRY_COMPARE(messages.last().value("type").toString(), QStringLiteral("release_all"));
++        // Allow a later heartbeat to arrive before checking the release.
++        // The startup handshake also releases, so require one new message.
++        QTest::qWait(400);
++        QTRY_COMPARE(releaseCount(messages), releasesBefore + 1);
 +        QVERIFY(bridge.handleKeyboard(5, false));
 +        QTest::qWait(30);
 +        QCOMPARE(keyboardStates(messages).size(), 4);
@@ -2832,8 +2845,9 @@
 +        QVERIFY(bridge.handleKeyboard(4, true));
 +        QTRY_COMPARE(mouseStates(messages).size(), 1);
 +        QTRY_COMPARE(keyboardStates(messages).size(), 1);
++        const int releasesBefore = releaseCount(messages);
 +        QCOMPARE(bridge.setPaused(true), std::uint8_t(0));
-+        QTRY_COMPARE(messages.last().value("type").toString(), QStringLiteral("release_all"));
++        QTRY_COMPARE(releaseCount(messages), releasesBefore + 1);
 +        QVERIFY(bridge.status().paused);
 +        QVERIFY(bridge.ready());
 +        QVERIFY(bridge.handle(1, true));
@@ -2949,8 +2963,9 @@
 +        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
 +        QVERIFY(bridge.handle(0, true));
 +        QTRY_COMPARE(mouseStates(messages).size(), 1);
++        const int releasesBefore = releaseCount(messages);
 +        QCOMPARE(bridge.releaseAll(), std::uint8_t(0));
-+        QTRY_COMPARE(messages.last().value("type").toString(), QStringLiteral("release_all"));
++        QTRY_COMPARE(releaseCount(messages), releasesBefore + 1);
 +        QVERIFY(bridge.handle(0, false));
 +        QTest::qWait(30);
 +        QCOMPARE(mouseStates(messages).size(), 1);

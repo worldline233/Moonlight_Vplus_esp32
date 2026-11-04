@@ -1,7 +1,7 @@
 {
   "baseline_repository": "qiin2333/moonlight-qt",
   "baseline_commit": "31d1d0033b425d31fd24a2c94e87e256619e4f4e",
-  "patch_sha256": "3818bd164a82cd0acd719a36b84beb8054570c3fffcb690d2d0423d7a2d3bcee",
+  "patch_sha256": "13aa65fa8740ea52b01c9402109782d058af098ed78460ad9f5153325f17f3c3",
   "submodules": [
     {
       "path": "app/SDL_GameControllerDB",
@@ -68,7 +68,7 @@
     "moonlight-common-c/moonlight-common-c/src/VideoDepacketizer.c": "0e39c7c2de774a6c69d56956452ed6ba9570f4d115fc2ec1a6a6b8cd8a535309",
     "tests/esp32_keyboard_router/main.cpp": "6586a7ab250c7a2dcb0b28e6e887daefaf2a29c03188a4725997abbc65c12c6c",
     "tests/esp32_mouse_bridge/esp32_mouse_bridge.pro": "fed941f24c279fa4fcb1de8083828ad0fd712d7c9e23f6fc1bae133d4a5528e2",
-    "tests/esp32_mouse_bridge/main.cpp": "774800335e1b0c17347b9e211a25af15caf25a8a755d4b3cde40461b77d6cf8e",
+    "tests/esp32_mouse_bridge/main.cpp": "5fc190c81e8758a99955c5353899433573a0358b027799409fb9f4e01ac3987d",
     "tests/esp32_mouse_router/esp32_mouse_router.pro": "aa19b7e20001e0eb20ccf34f0cdc2c49618c965ea55262b4b9b7259aff7e2adf",
     "tests/esp32_mouse_router/main.cpp": "7d86342e08dd28bd0dbaa4bdd16185ae6d291369af26a55833a2cd52cf1b624c",
     "tests/esp32_performance_stats/esp32_performance_stats.pro": "245ca424b15cafedf8bd308b420b6ad041b52a0624d9a03995d20e4a4d4a5dfd",
