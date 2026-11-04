@@ -81,6 +81,53 @@ typedef struct _PACKET_HOLDER {
 } PACKET_HOLDER, *PPACKET_HOLDER;
 
 static PLT_MUTEX batchedInputMutex;
+// Enabled only for a diagnostic launch. Call counters share the existing
+// batching lock; submission counters and the log window belong to the sender.
+static bool mouseDiagnosticsEnabled;
+static bool mouseDiagnosticWindowStarted;
+static uint64_t mouseDiagnosticWindowStart;
+static uint64_t mouseDiagnosticRelativeCalls;
+static uint64_t mouseDiagnosticAbsoluteCalls;
+static uint64_t mouseDiagnosticRelativeSubmitted;
+static uint64_t mouseDiagnosticAbsoluteSubmitted;
+
+static void recordMouseInputSubmission(uint32_t magic) {
+    bool relative = magic == LE32(MOUSE_MOVE_REL_MAGIC) ||
+                    magic == LE32(MOUSE_MOVE_REL_MAGIC_GEN5);
+    if (!relative && magic != LE32(MOUSE_MOVE_ABS_MAGIC)) {
+        return;
+    }
+
+    uint64_t now = PltGetMillis();
+    if (!mouseDiagnosticWindowStarted) {
+        mouseDiagnosticWindowStarted = true;
+        mouseDiagnosticWindowStart = now;
+    }
+    if (relative) {
+        mouseDiagnosticRelativeSubmitted++;
+    }
+    else {
+        mouseDiagnosticAbsoluteSubmitted++;
+    }
+    uint64_t elapsed = now - mouseDiagnosticWindowStart;
+    if (elapsed < 1000) {
+        return;
+    }
+
+    PltLockMutex(&batchedInputMutex);
+    uint64_t relativeCalls = mouseDiagnosticRelativeCalls;
+    uint64_t absoluteCalls = mouseDiagnosticAbsoluteCalls;
+    mouseDiagnosticRelativeCalls = mouseDiagnosticAbsoluteCalls = 0;
+    PltUnlockMutex(&batchedInputMutex);
+
+    double scale = 1000.0 / elapsed;
+    Limelog("MouseDiag transport window_ms=%llu relative_calls_hz=%.1f absolute_calls_hz=%.1f relative_submitted_hz=%.1f absolute_submitted_hz=%.1f\n",
+            (unsigned long long)elapsed, (double)relativeCalls * scale, (double)absoluteCalls * scale,
+            (double)mouseDiagnosticRelativeSubmitted * scale, (double)mouseDiagnosticAbsoluteSubmitted * scale);
+    mouseDiagnosticRelativeSubmitted = mouseDiagnosticAbsoluteSubmitted = 0;
+    mouseDiagnosticWindowStart = now;
+}
+
 static PPACKET_HOLDER currentQueuedControllerPacket[MAX_GAMEPADS];
 static struct {
     float x, y, z;
@@ -127,6 +174,13 @@ int initializeInputStream(void) {
     memset(&currentRelativeMouseState, 0, sizeof(currentRelativeMouseState));
     memset(&currentAbsoluteMouseState, 0, sizeof(currentAbsoluteMouseState));
     PltCreateMutex(&batchedInputMutex);
+
+    const char* diagnostics = getenv("MOONLIGHT_MOUSE_DIAGNOSTICS");
+    mouseDiagnosticsEnabled = diagnostics != NULL && strcmp(diagnostics, "1") == 0;
+    mouseDiagnosticWindowStarted = false;
+    mouseDiagnosticWindowStart = 0;
+    mouseDiagnosticRelativeCalls = mouseDiagnosticAbsoluteCalls = 0;
+    mouseDiagnosticRelativeSubmitted = mouseDiagnosticAbsoluteSubmitted = 0;
 
     return 0;
 }
@@ -308,6 +362,11 @@ static bool sendInputPacket(PPACKET_HOLDER holder, bool moreData) {
         }
     }
 
+    // This counts logical mouse messages accepted by the transport. ENet may
+    // still queue/retransmit them; it does not prove host receipt or count UDP datagrams.
+    if (mouseDiagnosticsEnabled) {
+        recordMouseInputSubmission(holder->packet.header.magic);
+    }
     return true;
 }
 
@@ -748,6 +807,9 @@ int LiSendMouseMoveEvent(short deltaX, short deltaY) {
 
     PltLockMutex(&batchedInputMutex);
 
+    if (mouseDiagnosticsEnabled) {
+        mouseDiagnosticRelativeCalls++;
+    }
     // Combine the previous deltas with the new one
     currentRelativeMouseState.deltaX += deltaX;
     currentRelativeMouseState.deltaY += deltaY;
@@ -811,6 +873,9 @@ int LiSendMousePositionEvent(short x, short y, short referenceWidth, short refer
 
     PltLockMutex(&batchedInputMutex);
 
+    if (mouseDiagnosticsEnabled) {
+        mouseDiagnosticAbsoluteCalls++;
+    }
     // Overwrite the previous mouse location with the new one
     currentAbsoluteMouseState.x = x;
     currentAbsoluteMouseState.y = y;

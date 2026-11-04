@@ -13,6 +13,39 @@ bool isSyntheticPointerMouseEvent(Uint32 deviceId)
 
 }
 
+void SdlInputHandler::recordMouseMotionForwardResult(int result)
+{
+    if (m_MouseDiagnosticsEnabled) {
+        ++m_MouseDiagnosticForwardCalls;
+        if (result != 0) {
+            ++m_MouseDiagnosticForwardErrors;
+        }
+    }
+}
+
+void SdlInputHandler::logMouseMotionDiagnostics()
+{
+    if (!m_MouseDiagnosticsEnabled) {
+        return;
+    }
+    const Uint32 now = SDL_GetTicks();
+    const Uint32 elapsed = now - m_MouseDiagnosticWindowTicks;
+    if (elapsed < 1000) {
+        return;
+    }
+    const double scale = 1000.0 / elapsed;
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "MouseDiag client mode=%s window_ms=%u sdl_hz=%.1f batch_hz=%.1f forward_hz=%.1f errors=%llu",
+                m_AbsoluteMouseMode ? "absolute" : "relative", elapsed,
+                static_cast<double>(m_MouseDiagnosticEvents) * scale,
+                static_cast<double>(m_MouseDiagnosticBatches) * scale,
+                static_cast<double>(m_MouseDiagnosticForwardCalls) * scale,
+                static_cast<unsigned long long>(m_MouseDiagnosticForwardErrors));
+    m_MouseDiagnosticWindowTicks = now;
+    m_MouseDiagnosticEvents = m_MouseDiagnosticBatches = 0;
+    m_MouseDiagnosticForwardCalls = m_MouseDiagnosticForwardErrors = 0;
+}
+
 void SdlInputHandler::handleMouseButtonEvent(SDL_MouseButtonEvent* event)
 {
     int button;
@@ -114,6 +147,15 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
     }
 #endif
 
+    if (m_MouseDiagnosticsEnabled) {
+        if (!m_MouseDiagnosticWindowStarted) {
+            m_MouseDiagnosticWindowStarted = true;
+            m_MouseDiagnosticWindowTicks = SDL_GetTicks();
+        }
+        ++m_MouseDiagnosticEvents;
+        ++m_MouseDiagnosticBatches;
+    }
+
     // Batch all pending mouse motion events to save CPU time
     Sint32 x = event->x, y = event->y, xrel = event->xrel, yrel = event->yrel;
     SDL_Event nextEvent;
@@ -129,6 +171,9 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
         }
 #endif
 
+        if (m_MouseDiagnosticsEnabled) {
+            ++m_MouseDiagnosticEvents;
+        }
         x = event->x;
         y = event->y;
         xrel += event->xrel;
@@ -177,7 +222,8 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
             }
         }
         if (mouseInVideoRegion || m_MouseWasInVideoRegion || m_PendingMouseButtonsAllUpOnVideoRegionLeave) {
-            LiSendMousePositionEvent((short)x, (short)y, dst.w, dst.h);
+            recordMouseMotionForwardResult(
+                LiSendMousePositionEvent((short)x, (short)y, dst.w, dst.h));
         }
 
         // Adjust the cursor visibility if applicable
@@ -195,8 +241,9 @@ void SdlInputHandler::handleMouseMotionEvent(SDL_MouseMotionEvent* event)
         m_MouseWasInVideoRegion = mouseInVideoRegion;
     }
     else {
-        LiSendMouseMoveEvent(xrel, yrel);
+        recordMouseMotionForwardResult(LiSendMouseMoveEvent(xrel, yrel));
     }
+    logMouseMotionDiagnostics();
 }
 
 void SdlInputHandler::handleMouseWheelEvent(SDL_MouseWheelEvent* event)

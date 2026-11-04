@@ -69,6 +69,8 @@ macOS 的 `scripts/test-input.sh` 和 Windows 的 `scripts/test-input.ps1` 覆�
 
 macOS 修复在 `app/Info.plist` 设置 `NSApplicationUpdateCycleEnabled=false`，取消 macOS 26+ SDK 默认启用的输入事件与显示刷新同步。云端打包后再次检查应用内该设置。实际鼠标延迟还受屏幕刷新率、V-Sync、网络与视频处理影响，需要实机比较。
 
+如果 Mac 本机回报率较高、串流后明显降低，可按 [鼠标诊断说明](docs/MOUSE-DIAGNOSTICS.md) 开启按秒统计，比较 SDL 接收、客户端合并及传输层提交速率。新的 macOS Action 产物附带采集脚本和说明。
+
 ## 来源与许可证
 
 上游为 [qiin2333/moonlight-qt](https://github.com/qiin2333/moonlight-qt)，保留的产品说明见 [README.upstream.md](README.upstream.md)。本项目依照 GPLv3 分发，见 [LICENSE](LICENSE)；依赖保留各自许可证。

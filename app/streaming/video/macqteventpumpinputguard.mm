@@ -54,6 +54,11 @@ bool isMouseEventHandledBySdl(NSEventType type)
 
 MacQtEventPumpInputGuard::MacQtEventPumpInputGuard(SDL_Window* streamingWindow)
 {
+    if (qEnvironmentVariable("MOONLIGHT_MOUSE_DIAGNOSTICS") == QStringLiteral("1")) {
+        id setting = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSApplicationUpdateCycleEnabled"];
+        qInfo("MouseDiag macOS NSApplicationUpdateCycleEnabled=%s",
+              setting ? [[setting description] UTF8String] : "missing");
+    }
     setStreamingWindow(streamingWindow);
 
     if (QCoreApplication* app = QCoreApplication::instance()) {

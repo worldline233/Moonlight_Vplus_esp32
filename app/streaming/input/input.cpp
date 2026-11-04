@@ -164,6 +164,8 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
       m_DragButton(0),
       m_NumFingersDown(0)
 {
+    m_MouseDiagnosticsEnabled =
+        qEnvironmentVariable("MOONLIGHT_MOUSE_DIAGNOSTICS") == QStringLiteral("1");
     const QPointer<Session> esp32Session(Session::get());
     m_Esp32Mouse = std::make_unique<Esp32MouseBridge>(esp32HostName, esp32HostUuid, QString(),
         [esp32Session](const QString& message) {
@@ -191,6 +193,11 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
     // https://github.com/libsdl-org/SDL/commit/e54001b02809dcebbb822bd0297919c8c76976a1
     SDL_version ver;
     SDL_GetVersion(&ver);
+    if (m_MouseDiagnosticsEnabled) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "MouseDiag enabled SDL=%u.%u.%u; rates are events/messages per second, not USB polling measurements",
+                    ver.major, ver.minor, ver.patch);
+    }
     m_NeedsManualCaptureOnLeave = !(ver.major == 2 && ver.minor >= 30 && ver.patch >= 50) && !SDL_GetHint("SDL3_VERSION");
     if (m_NeedsManualCaptureOnLeave) {
         // Disable the buggy auto-capture on earlier SDL2 builds

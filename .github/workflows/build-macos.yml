@@ -67,6 +67,8 @@ jobs:
           set -euo pipefail
           python3 -c 'import plistlib; p=plistlib.load(open("build/build-Release/app/Moonlight.app/Contents/Info.plist", "rb")); assert p["NSApplicationUpdateCycleEnabled"] is False'
           cp SOURCE-PROVENANCE.json build/installer-Release/
+          cp scripts/diagnose-mouse-macos.sh build/installer-Release/
+          cp docs/MOUSE-DIAGNOSTICS.md build/installer-Release/
           git rev-parse HEAD > build/installer-Release/SOURCE-COMMIT.txt
           cd build/installer-Release
           shasum -a 256 ./*.dmg > SHA256SUMS.txt
@@ -80,6 +82,8 @@ jobs:
             build/installer-Release/SHA256SUMS.txt
             build/installer-Release/SOURCE-PROVENANCE.json
             build/installer-Release/SOURCE-COMMIT.txt
+            build/installer-Release/diagnose-mouse-macos.sh
+            build/installer-Release/MOUSE-DIAGNOSTICS.md
           compression-level: 0
           retention-days: 7
           if-no-files-found: error

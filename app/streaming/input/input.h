@@ -272,6 +272,16 @@ public:
     void setGamepadMouse(bool enabled) { m_GamepadMouse = enabled; }
 
 private:
+    void recordMouseMotionForwardResult(int result);
+    void logMouseMotionDiagnostics();
+    bool m_MouseDiagnosticsEnabled = false;
+    bool m_MouseDiagnosticWindowStarted = false;
+    Uint32 m_MouseDiagnosticWindowTicks = 0;
+    uint64_t m_MouseDiagnosticEvents = 0;
+    uint64_t m_MouseDiagnosticBatches = 0;
+    uint64_t m_MouseDiagnosticForwardCalls = 0;
+    uint64_t m_MouseDiagnosticForwardErrors = 0;
+
     bool routeEsp32MouseButton(int button, bool down);
     void releaseEsp32MouseButtons();
     std::unique_ptr<Esp32MouseBridge> m_Esp32Mouse;
