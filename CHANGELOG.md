@@ -8,5 +8,6 @@
 - 加入 Moonlight 上游提交 `f018a71a8a2a63377acde15366625e8effeae05b`：在 macOS Info.plist 中关闭 NSApplicationUpdateCycleEnabled，处理新 SDK 导致输入事件随显示刷新同步的问题。
 - 网络测试检查本次新增的释放消息，允许正常心跳随后到达。
 - 更新检查使用本仓库的 GitHub Releases；macOS、Windows 工作流直接编译当前源码，发布版本号统一为 1.0.0。
+- Windows 文件及 MSI 安装版本使用应用主版本号加 6 的映射，v1.0 对应 `7.0.0.0`，支持升级已有 6.x 安装版；界面、更新检查和安装包文件名仍为 `1.0.0`。
 
 上游源码和依赖版本见 SOURCE-PROVENANCE.json。鼠标延迟改善需在 Mac 实机上对比；本修复不改变屏幕刷新率或视频编解码路径。

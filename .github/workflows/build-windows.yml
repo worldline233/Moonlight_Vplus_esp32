@@ -55,6 +55,16 @@ jobs:
         shell: cmd
         run: scripts\build-arch.bat Release x64
 
+      - name: Verify Windows file version
+        shell: pwsh
+        run: |
+          $expected = python scripts/derive-version.py --field windows-numeric
+          if ($LASTEXITCODE -ne 0) { throw 'Windows version derivation failed' }
+          $info = (Get-Item 'build/build-x64-release/app/release/Moonlight.exe').VersionInfo
+          $actual = @($info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart) -join '.'
+          if ($actual -ne $expected) { throw "Windows file version mismatch: expected $expected, got $actual" }
+          Write-Host "Verified Windows file/MSI source version: $actual"
+
       - name: Record checksums and source
         shell: pwsh
         run: |

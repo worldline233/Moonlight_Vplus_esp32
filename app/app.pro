@@ -25,6 +25,13 @@ MOONLIGHT_NUMERIC_VERSION = $$system($$VERSION_PYTHON $$VERSION_SCRIPT --source-
 isEmpty(MOONLIGHT_VERSION): MOONLIGHT_VERSION = $$cat(version.txt)
 isEmpty(MOONLIGHT_NUMERIC_VERSION): MOONLIGHT_NUMERIC_VERSION = $$cat(version.txt)
 
+win32 {
+    # Keep the MSI upgrade version above the existing 6.x installation while
+    # VERSION_STR and artifact names retain the application's 1.x version.
+    MOONLIGHT_WINDOWS_NUMERIC_VERSION = $$system($$VERSION_PYTHON $$VERSION_SCRIPT --source-root $$VERSION_SOURCE_ROOT --field windows-numeric)
+    isEmpty(MOONLIGHT_WINDOWS_NUMERIC_VERSION): error("Unable to derive the Windows upgrade version")
+}
+
 # Precompile QML files to avoid writing qmlcache on portable versions.
 # Since this binds the app against the Qt runtime version, we will only
 # do this for Windows and Mac (when disable-prebuilts is not defined),
@@ -741,5 +748,6 @@ macx {
     }
 }
 
-VERSION = "$$MOONLIGHT_NUMERIC_VERSION"
+win32: VERSION = "$$MOONLIGHT_WINDOWS_NUMERIC_VERSION"
+else: VERSION = "$$MOONLIGHT_NUMERIC_VERSION"
 DEFINES += VERSION_STR=\\\"$$MOONLIGHT_VERSION\\\"

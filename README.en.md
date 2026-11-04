@@ -1,6 +1,6 @@
 # Moonlight V+ ESP32 v1.0
 
-A complete source fork of Moonlight V+ 6.4.1 with per-host ESP32 USB keyboard and mouse-button routing. The application and package version is `1.0.0`.
+A complete source fork of Moonlight V+ 6.4.1 with per-host ESP32 USB keyboard and mouse-button routing. The UI, update checks and package filenames use version `1.0.0`. Windows EXE and MSI versions add six to the application major version (`1.0.0` → `7.0.0.0`, `1.1.0` → `7.1.0.0`, `2.0.0` → `8.0.0.0`) so existing 6.x installations can upgrade using the same UpgradeCode. macOS version numbering is unchanged.
 
 - Protocol 2, 16 ordinary keys plus 8 independent modifiers.
 - Per-host settings, excluded keys, local shortcuts, and ESP32 status in the original performance overlay.

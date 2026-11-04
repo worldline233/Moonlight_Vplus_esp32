@@ -9,6 +9,9 @@ Version precedence:
 The script intentionally emits separate display/artifact/numeric forms because
 Windows file versions and Apple bundle versions must remain numeric, while
 application/about-box versions can include Git metadata.
+Windows numeric versions add six to the application major version (1.x -> 7.x)
+so MSI upgrades remain newer than the existing 6.x product with the same
+UpgradeCode. Apple bundle versions keep the application version numbering.
 """
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ GIT_DESCRIBE_RE = re.compile(
     r"-(?P<count>\d+)-g(?P<sha>[0-9a-fA-F]+)"
     r"(?P<dirty>-dirty)?$"
 )
+
+WINDOWS_VERSION_MAJOR_OFFSET = 6
 
 
 def run_git(source_root: Path, *args: str) -> str | None:
@@ -59,6 +64,14 @@ def clamp_u16(value: int) -> int:
     return max(0, min(value, 65535))
 
 
+def numeric_versions(major: int, minor: int, patch: int, count: int = 0) -> dict[str, str]:
+    revision = clamp_u16(count)
+    return {
+        "numeric": f"{major}.{minor}.{patch}.{revision}",
+        "windows_numeric": f"{major + WINDOWS_VERSION_MAJOR_OFFSET}.{minor}.{patch}.{revision}",
+    }
+
+
 def normalize_explicit_version(version: str) -> str:
     if re.match(r"^v\d", version):
         return version[1:]
@@ -77,7 +90,7 @@ def derive(source_root: Path) -> dict[str, str]:
             "base": base,
             "display": display,
             "artifact": display.replace("+", "-"),
-            "numeric": f"{major}.{minor}.{patch}.0",
+            **numeric_versions(major, minor, patch),
             "describe": ci_version,
             "commit": run_git(source_root, "rev-parse", "--short=8", "HEAD") or "unknown",
         }
@@ -116,7 +129,7 @@ def derive(source_root: Path) -> dict[str, str]:
                 "base": base,
                 "display": display,
                 "artifact": display.replace("+", "-"),
-                "numeric": f"{major}.{minor}.{patch}.{clamp_u16(count)}",
+                **numeric_versions(major, minor, patch, count),
                 "describe": describe,
                 "commit": commit,
             }
@@ -126,7 +139,7 @@ def derive(source_root: Path) -> dict[str, str]:
         "base": fallback,
         "display": fallback,
         "artifact": fallback.replace("+", "-"),
-        "numeric": f"{major}.{minor}.{patch}.0",
+        **numeric_versions(major, minor, patch),
         "describe": fallback,
         "commit": commit,
     }
@@ -141,7 +154,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--field",
-        choices=("base", "display", "artifact", "numeric", "describe", "commit"),
+        choices=("base", "display", "artifact", "numeric", "windows-numeric", "describe", "commit"),
         default="display",
         help="Single field to print",
     )
@@ -157,15 +170,16 @@ def main() -> int:
     info = derive(source_root)
 
     if args.format == "env":
-        for key in ("base", "display", "artifact", "numeric", "describe", "commit"):
+        for key in ("base", "display", "artifact", "numeric", "windows_numeric", "describe", "commit"):
             print(f"MOONLIGHT_{key.upper()}={info[key]}")
     elif args.format == "qmake":
         print(f"MOONLIGHT_VERSION = {info['display']}")
         print(f"MOONLIGHT_ARTIFACT_VERSION = {info['artifact']}")
         print(f"MOONLIGHT_NUMERIC_VERSION = {info['numeric']}")
+        print(f"MOONLIGHT_WINDOWS_NUMERIC_VERSION = {info['windows_numeric']}")
         print(f"MOONLIGHT_GIT_COMMIT = {info['commit']}")
     else:
-        print(info[args.field])
+        print(info[args.field.replace('-', '_')])
 
     return 0
 
