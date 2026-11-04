@@ -1,0 +1,3412 @@
+--- a/.github/workflows/build-win-mac.yml
++++ b/.github/workflows/build-win-mac.yml
+@@ -59,7 +59,7 @@
+           set-env: ${{ runner.os != 'Windows' }}
+           add-tools-to-path: ${{ runner.os != 'Windows' }}
+           version: ${{ matrix.qt_version }}
+-          modules: 'qtmultimedia qtimageformats'
++          modules: 'qtmultimedia qtimageformats qtwebsockets'
+           aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e'
+ 
+       - name: Install Qt ARM64 (Windows)
+@@ -71,7 +71,7 @@
+           add-tools-to-path: false
+           arch: win64_msvc2022_arm64_cross_compiled
+           version: ${{ matrix.qt_version }}
+-          modules: 'qtmultimedia qtimageformats'
++          modules: 'qtmultimedia qtimageformats qtwebsockets'
+ 
+       - name: Build x64 binaries (Windows)
+         if: runner.os == 'Windows'
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -49,7 +49,7 @@
+       uses: jurplel/install-qt-action@v4
+       with:
+         version: '6.11.1'
+-        modules: 'qtmultimedia qtimageformats'
++        modules: 'qtmultimedia qtimageformats qtwebsockets'
+         cache: true
+         aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e'
+ 
+@@ -98,7 +98,7 @@
+         host: windows
+         target: desktop
+         version: '6.11.1'
+-        modules: 'qtmultimedia qtimageformats'
++        modules: 'qtmultimedia qtimageformats qtwebsockets'
+         use-naqt: true
+ 
+     - name: Setup build environment
+@@ -261,7 +261,7 @@
+         host: windows
+         target: desktop
+         version: '6.11.1'
+-        modules: 'qtmultimedia qtimageformats'
++        modules: 'qtmultimedia qtimageformats qtwebsockets'
+         use-naqt: true
+ 
+     - name: Build Windows arm64
+@@ -333,7 +333,7 @@
+       uses: jurplel/install-qt-action@v4
+       with:
+         version: '6.11.1'
+-        modules: 'qtmultimedia qtimageformats'
++        modules: 'qtmultimedia qtimageformats qtwebsockets'
+         cache: true
+         aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e'
+ 
+@@ -405,7 +405,7 @@
+         version: '6.11.1'
+         host: ${{ matrix.qt_host }}
+         arch: ${{ matrix.qt_arch }}
+-        modules: 'qtmultimedia qtimageformats'
++        modules: 'qtmultimedia qtimageformats qtwebsockets'
+         cache: true
+ 
+     - name: Setup local env and metadata
+--- a/app/app.pro
++++ b/app/app.pro
+@@ -1,4 +1,4 @@
+-QT += core quick network quickcontrols2 svg gui-private
++QT += core quick network quickcontrols2 svg gui-private websockets
+ !config_SL: QT += multimedia
+ CONFIG += c++17
+ 
+@@ -226,6 +226,7 @@
+ }
+ 
+ SOURCES += \
++    streaming/input/esp32mousebridge.cpp \
+     backend/nvaddress.cpp \
+     backend/nvapp.cpp \
+     cli/pair.cpp \
+@@ -246,6 +247,7 @@
+     settings/devicelocalsettings.cpp \
+     settings/mappingfetcher.cpp \
+     settings/streamingpreferences.cpp \
++    settings/esp32inputsettings.cpp \
+     streaming/input/abstouch.cpp \
+     streaming/input/cursorshapeclassifier.cpp \
+     streaming/input/gamepad.cpp \
+@@ -291,6 +293,11 @@
+     streaming/video/videoenhancement.cpp
+ 
+ HEADERS += \
++    streaming/input/esp32mousebridge.h \
++    streaming/input/esp32mouserouter.h \
++    streaming/input/esp32keyboardrouter.h \
++    streaming/input/esp32inputstatus.h \
++    streaming/input/esp32performancestats.h \
+     SDL_compat.h \
+     backend/nvaddress.h \
+     backend/nvapp.h \
+@@ -317,6 +324,7 @@
+     cli/quitstream.h \
+     cli/startstream.h \
+     settings/streamingpreferences.h \
++    settings/esp32inputsettings.h \
+     streaming/input/cursorshapeclassifier.h \
+     streaming/input/penhistory.h \
+     streaming/input/input.h \
+--- a/app/gui/PcView.qml
++++ b/app/gui/PcView.qml
+@@ -436,6 +436,10 @@
+                     }
+                 }
+                 NavigableMenuItem {
++                    text: qsTr("ESP32 输入设置")
++                    onTriggered: esp32InputDialog.openForComputer(index, model.name)
++                }
++                NavigableMenuItem {
+                     text: qsTr("Delete PC")
+                     onTriggered: {
+                         deletePcDialog.pcIndex = index
+@@ -569,6 +573,207 @@
+ 
+             // Stop showing the spinner and show the image instead
+             showSpinner = false
++        }
++    }
++
++    NavigableDialog {
++        id: esp32InputDialog
++        property string hostUuid: ""
++        property string pcName: ""
++        property string validationError: ""
++        title: qsTr("ESP32 输入设置 — %1").arg(pcName)
++        width: Math.min(560, pcGrid.width - 32)
++        standardButtons: DialogButtonBox.NoButton
++        closePolicy: Popup.CloseOnEscape
++
++        function openForComputer(pcIndex, name) {
++            var values = computerModel.getEsp32Settings(pcIndex)
++            if (!values.host_uuid) return
++            hostUuid = values.host_uuid
++            pcName = name
++            esp32Enabled.checked = values.enabled
++            esp32MouseEnabled.checked = values.mouse_enabled
++            esp32MouseLeft.checked = (values.mouse_buttons & 1) !== 0
++            esp32MouseRight.checked = (values.mouse_buttons & 2) !== 0
++            esp32MouseMiddle.checked = (values.mouse_buttons & 4) !== 0
++            esp32MouseBack.checked = (values.mouse_buttons & 8) !== 0
++            esp32MouseForward.checked = (values.mouse_buttons & 16) !== 0
++            esp32KeyboardEnabled.checked = values.keyboard_enabled
++            esp32Address.text = values.address
++            esp32Port.text = String(values.port)
++            esp32Key.text = values.access_key
++            esp32ExcludedKeys.text = values.excluded_keys
++            esp32PauseKey.currentIndex = values.shortcut_pause
++            esp32ReconnectKey.currentIndex = values.shortcut_reconnect
++            esp32ReleaseKey.currentIndex = values.shortcut_release
++            validationError = ""
++            open()
++        }
++
++        function saveSettings() {
++            validationError = computerModel.saveEsp32Settings(hostUuid, {
++                enabled: esp32Enabled.checked,
++                mouse_enabled: esp32MouseEnabled.checked,
++                mouse_buttons: (esp32MouseLeft.checked ? 1 : 0) | (esp32MouseRight.checked ? 2 : 0) |
++                               (esp32MouseMiddle.checked ? 4 : 0) | (esp32MouseBack.checked ? 8 : 0) |
++                               (esp32MouseForward.checked ? 16 : 0),
++                keyboard_enabled: esp32KeyboardEnabled.checked,
++                address: esp32Address.text.trim(),
++                port: Number(esp32Port.text),
++                access_key: esp32Key.text,
++                excluded_keys: esp32ExcludedKeys.text,
++                shortcut_pause: esp32PauseKey.currentIndex,
++                shortcut_reconnect: esp32ReconnectKey.currentIndex,
++                shortcut_release: esp32ReleaseKey.currentIndex
++            })
++            if (validationError === "") close()
++        }
++
++        onOpened: esp32Enabled.forceActiveFocus()
++        onClosed: { esp32Key.clear(); hostUuid = "" }
++
++        contentItem: ScrollView {
++            id: esp32SettingsScroll
++            clip: true
++            contentWidth: availableWidth
++            implicitHeight: Math.min(600, Math.max(220, pcGrid.height - 160))
++
++        ColumnLayout {
++            width: esp32SettingsScroll.availableWidth
++            spacing: Theme.spaceSm
++
++            CheckBox {
++                id: esp32Enabled
++                text: qsTr("为这台主机启用 ESP32 输入")
++                Layout.fillWidth: true
++            }
++            Label {
++                text: qsTr("地址（IP 或域名）")
++                color: Theme.text
++            }
++            HardTextField {
++                id: esp32Address
++                placeholderText: "192.168.1.111 / lan.worldline233.cloud"
++                enabled: esp32Enabled.checked
++                Layout.fillWidth: true
++            }
++            RowLayout {
++                Layout.fillWidth: true
++                Label { text: qsTr("端口"); color: Theme.text }
++                HardTextField {
++                    id: esp32Port
++                    enabled: esp32Enabled.checked
++                    validator: IntValidator { bottom: 1; top: 65535 }
++                    inputMethodHints: Qt.ImhDigitsOnly
++                    Layout.preferredWidth: 88
++                }
++                Label { text: qsTr("控制密钥"); color: Theme.text }
++                HardTextField {
++                    id: esp32Key
++                    enabled: esp32Enabled.checked
++                    echoMode: TextInput.Password
++                    maximumLength: 6
++                    Layout.fillWidth: true
++                }
++            }
++            CheckBox {
++                id: esp32MouseEnabled
++                text: qsTr("鼠标按钮通过 ESP32")
++                enabled: esp32Enabled.checked
++                Layout.fillWidth: true
++            }
++            Flow {
++                enabled: esp32Enabled.checked && esp32MouseEnabled.checked
++                Layout.fillWidth: true
++                CheckBox { id: esp32MouseLeft; text: qsTr("左键") }
++                CheckBox { id: esp32MouseRight; text: qsTr("右键") }
++                CheckBox { id: esp32MouseMiddle; text: qsTr("中键") }
++                CheckBox { id: esp32MouseBack; text: qsTr("后退侧键") }
++                CheckBox { id: esp32MouseForward; text: qsTr("前进侧键") }
++            }
++            Label {
++                text: qsTr("勾选的按钮走 ESP32，未勾选的按钮保留 Moonlight 路径；移动和滚轮始终走 Moonlight。")
++                wrapMode: Text.WordWrap
++                color: Theme.textDim
++                Layout.fillWidth: true
++            }
++            CheckBox {
++                id: esp32KeyboardEnabled
++                text: qsTr("键盘通过 ESP32（屏蔽 Moonlight 键盘发送）")
++                enabled: esp32Enabled.checked
++                Layout.fillWidth: true
++            }
++            Label {
++                text: qsTr("排除按键（仅本地，不转发到远端）")
++                color: Theme.text
++                Layout.fillWidth: true
++            }
++            HardTextField {
++                id: esp32ExcludedKeys
++                enabled: esp32Enabled.checked && esp32KeyboardEnabled.checked
++                placeholderText: "MetaLeft, MetaRight, A, F1"
++                Layout.fillWidth: true
++            }
++            Label {
++                text: qsTr("多个键用逗号分隔；支持 A、0、F1、Escape、ControlLeft、MetaLeft 等名称。只在 ESP32 键盘模式生效，原有本地快捷键优先。")
++                wrapMode: Text.WordWrap
++                color: Theme.textDim
++                Layout.fillWidth: true
++            }
++            Label {
++                text: qsTr("ESP32 本地快捷键：Ctrl + Alt + Shift + 所选功能键")
++                wrapMode: Text.WordWrap
++                color: Theme.text
++                Layout.fillWidth: true
++            }
++            GridLayout {
++                columns: 2
++                enabled: esp32Enabled.checked
++                Layout.fillWidth: true
++                Label { text: qsTr("暂停／恢复 USB 输入"); color: Theme.text }
++                ComboBox {
++                    id: esp32PauseKey
++                    model: [qsTr("关闭"), "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"]
++                    Layout.fillWidth: true
++                }
++                Label { text: qsTr("重新连接"); color: Theme.text }
++                ComboBox {
++                    id: esp32ReconnectKey
++                    model: esp32PauseKey.model
++                    Layout.fillWidth: true
++                }
++                Label { text: qsTr("释放全部输入"); color: Theme.text }
++                ComboBox {
++                    id: esp32ReleaseKey
++                    model: esp32PauseKey.model
++                    Layout.fillWidth: true
++                }
++            }
++            Label {
++                text: qsTr("快捷键须互不重复。暂停只停止被 ESP32 接管的输入，不切回原生；其余输入保持原路径。ESP32 状态显示在原有性能统计栏（Ctrl+Alt+Shift+S）。")
++                wrapMode: Text.WordWrap
++                color: Theme.textDim
++                Layout.fillWidth: true
++            }
++            Label {
++                text: qsTr("未勾选的输入使用 Moonlight。ESP32 键盘断线时暂停发送；退出与释放捕获快捷键仍可使用。设置在下次串流时生效。")
++                wrapMode: Text.WordWrap
++                color: Theme.textDim
++                Layout.fillWidth: true
++            }
++            Label {
++                text: esp32InputDialog.validationError
++                visible: text !== ""
++                wrapMode: Text.WordWrap
++                color: "#ff8888"
++                Layout.fillWidth: true
++            }
++            RowLayout {
++                Layout.alignment: Qt.AlignRight
++                HardButton { text: qsTr("取消"); onClicked: esp32InputDialog.close() }
++                HardButton { text: qsTr("保存"); primary: true; onClicked: esp32InputDialog.saveSettings() }
++            }
++        }
+         }
+     }
+ 
+--- a/app/gui/computermodel.cpp
++++ b/app/gui/computermodel.cpp
+@@ -1,11 +1,13 @@
+ #include "computermodel.h"
+ #include "appmodel.h"
+ #include "backend/nvcomputer.h"
++#include "settings/esp32inputsettings.h"
+ 
+ #include <QDebug>
+ #include <QReadLocker>
+ #include <QThreadPool>
+ #include <QWriteLocker>
++#include <utility>
+ 
+ 
+ ComputerModel::ComputerModel(QObject* object)
+@@ -222,6 +224,11 @@
+ {
+     Q_ASSERT(computerIndex < m_Computers.count());
+ 
++    {
++        QReadLocker lock(&m_Computers[computerIndex]->lock);
++        Esp32InputSettings::remove(m_Computers[computerIndex]->uuid);
++    }
++
+     beginRemoveRows(QModelIndex(), computerIndex, computerIndex);
+ 
+     // m_Computer[computerIndex] will be deleted by this call
+@@ -231,6 +238,27 @@
+     m_Computers.removeAt(computerIndex);
+ 
+     endRemoveRows();
++}
++
++QVariantMap ComputerModel::getEsp32Settings(int computerIndex) const
++{
++    if (computerIndex < 0 || computerIndex >= m_Computers.count()) return {};
++    QReadLocker lock(&m_Computers[computerIndex]->lock);
++    const auto uuid = m_Computers[computerIndex]->uuid;
++    auto values = Esp32InputSettings::load(uuid);
++    values.insert(QStringLiteral("host_uuid"), uuid);
++    return values;
++}
++
++QString ComputerModel::saveEsp32Settings(QString hostUuid, QVariantMap values)
++{
++    // Use the UUID captured on opening, since discovery can reorder the list
++    // while the dialog is open. Never save to a different row accidentally.
++    for (auto* computer : std::as_const(m_Computers)) {
++        QReadLocker lock(&computer->lock);
++        if (computer->uuid == hostUuid) return Esp32InputSettings::save(hostUuid, values);
++    }
++    return tr("这台主机已被移除，请重新打开设置。");
+ }
+ 
+ class DeferredWakeHostTask : public QRunnable
+--- a/app/gui/computermodel.h
++++ b/app/gui/computermodel.h
+@@ -3,6 +3,7 @@
+ 
+ #include <QAbstractListModel>
+ #include <QVariantList>
++#include <QVariantMap>
+ 
+ class ComputerModel : public QAbstractListModel
+ {
+@@ -44,6 +45,9 @@
+ 
+     Q_INVOKABLE void renameComputer(int computerIndex, QString name);
+ 
++    Q_INVOKABLE QVariantMap getEsp32Settings(int computerIndex) const;
++    Q_INVOKABLE QString saveEsp32Settings(QString hostUuid, QVariantMap values);
++
+     Q_INVOKABLE Session* createSessionForCurrentGame(int computerIndex);
+ 
+     Q_INVOKABLE QVariantList getConnectionAddressesForComputer(int computerIndex) const;
+--- a/app/gui/settings/BasicSettingsPage.qml
++++ b/app/gui/settings/BasicSettingsPage.qml
+@@ -700,6 +700,55 @@
+             checked: StreamingPreferences.enableSunshineAbr
+             onToggled: function(value) { StreamingPreferences.enableSunshineAbr = value }
+         }
++
++        SettingsRow {
++            id: fecRow
++            title: qsTr("Packet loss protection (FEC)")
++            description: (StreamingPreferences.fecPercentage === -2
++                         ? qsTr("Use the host's FEC settings. Requires a compatible host; otherwise its default behavior is used.")
++                         : StreamingPreferences.fecPercentage === -1
++                           ? qsTr("Ask a compatible host to choose redundancy from network feedback. Otherwise its default behavior is used.")
++                           : qsTr("Your fixed percentage takes priority over the host's FEC settings. 0% disables FEC; higher values add more bandwidth relative to video data. Requires a compatible host.")) + "\n" + qsTr("Changes apply to the next stream.")
++
++            Row {
++                spacing: Theme.spaceSm
++                AutoResizingComboBox {
++                    anchors.verticalCenter: parent.verticalCenter
++                    // Row sizes itself from its children; avoid a parent-width dependency.
++                    maximumWidth: 220
++                    model: [qsTr("Host default"), qsTr("Automatic"), qsTr("Fixed")]
++                    currentIndex: StreamingPreferences.fecPercentage >= 0 ? 2 : StreamingPreferences.fecPercentage === -1 ? 1 : 0
++                    Accessible.name: fecRow.title
++                    Accessible.description: fecRow.description
++                    onActivated: {
++                        if (StreamingPreferences.fecPercentage >= 0)
++                            StreamingPreferences.fixedFecPercentage = StreamingPreferences.fecPercentage
++                        StreamingPreferences.fecPercentage = currentIndex === 0 ? -2 : currentIndex === 1 ? -1 : StreamingPreferences.fixedFecPercentage
++                        StreamingPreferences.save()
++                    }
++                }
++                SpinBox {
++                    anchors.verticalCenter: parent.verticalCenter
++                    visible: StreamingPreferences.fecPercentage >= 0
++                    from: 0
++                    to: 100
++                    editable: true
++                    value: StreamingPreferences.fixedFecPercentage
++                    Accessible.name: qsTr("Fixed FEC percentage")
++                    Accessible.description: fecRow.description
++                    onValueModified: {
++                        StreamingPreferences.fixedFecPercentage = value
++                        StreamingPreferences.fecPercentage = value
++                        StreamingPreferences.save()
++                    }
++                }
++                Label {
++                    anchors.verticalCenter: parent.verticalCenter
++                    visible: StreamingPreferences.fecPercentage >= 0
++                    text: "%"
++                }
++            }
++        }
+     }
+ 
+     // ================= 画质增强 =================
+--- a/app/languages/qml_zh_CN.ts
++++ b/app/languages/qml_zh_CN.ts
+@@ -561,6 +561,42 @@
+         <source>FPS</source>
+         <translation>帧</translation>
+     </message>
++    <message>
++        <source>Packet loss protection (FEC)</source>
++        <translation>丢包保护（FEC）</translation>
++    </message>
++    <message>
++        <source>Use the host's FEC settings. Requires a compatible host; otherwise its default behavior is used.</source>
++        <translation>使用主机的 FEC 设置。需要兼容的主机，否则使用主机的默认行为。</translation>
++    </message>
++    <message>
++        <source>Ask a compatible host to choose redundancy from network feedback. Otherwise its default behavior is used.</source>
++        <translation>由兼容的主机根据网络反馈自动选择冗余比例；不支持时使用主机的默认行为。</translation>
++    </message>
++    <message>
++        <source>Your fixed percentage takes priority over the host's FEC settings. 0% disables FEC; higher values add more bandwidth relative to video data. Requires a compatible host.</source>
++        <translation>需要兼容的主机，客户端指定比例优先于主机 FEC 设置。0% 关闭纠错；比例越高，相对视频数据增加的冗余带宽越多。</translation>
++    </message>
++    <message>
++        <source>Changes apply to the next stream.</source>
++        <translation>更改将在下次串流时生效。</translation>
++    </message>
++    <message>
++        <source>Host default</source>
++        <translation>跟随主机</translation>
++    </message>
++    <message>
++        <source>Automatic</source>
++        <translation>自动调整</translation>
++    </message>
++    <message>
++        <source>Fixed</source>
++        <translation>固定比例</translation>
++    </message>
++    <message>
++        <source>Fixed FEC percentage</source>
++        <translation>固定 FEC 比例</translation>
++    </message>
+ </context>
+ <context>
+     <name>CliPair</name>
+--- a/app/languages/qml_zh_TW.ts
++++ b/app/languages/qml_zh_TW.ts
+@@ -347,6 +347,42 @@
+         <location filename="../gui/settings/BasicSettingsPage.qml" line="888"/>
+         <source>FPS</source>
+         <translation type="unfinished"></translation>
++    </message>
++    <message>
++        <source>Packet loss protection (FEC)</source>
++        <translation>封包遺失保護（FEC）</translation>
++    </message>
++    <message>
++        <source>Use the host's FEC settings. Requires a compatible host; otherwise its default behavior is used.</source>
++        <translation>使用主機的 FEC 設定。需要相容的主機，否則使用主機的預設行為。</translation>
++    </message>
++    <message>
++        <source>Ask a compatible host to choose redundancy from network feedback. Otherwise its default behavior is used.</source>
++        <translation>由相容的主機依網路回饋自動選擇冗餘比例；不支援時使用主機的預設行為。</translation>
++    </message>
++    <message>
++        <source>Your fixed percentage takes priority over the host's FEC settings. 0% disables FEC; higher values add more bandwidth relative to video data. Requires a compatible host.</source>
++        <translation>需要相容的主機，用戶端指定比例優先於主機 FEC 設定。0% 關閉糾錯；比例越高，相對視訊資料增加的冗餘頻寬越多。</translation>
++    </message>
++    <message>
++        <source>Changes apply to the next stream.</source>
++        <translation>變更將於下次串流時生效。</translation>
++    </message>
++    <message>
++        <source>Host default</source>
++        <translation>跟隨主機</translation>
++    </message>
++    <message>
++        <source>Automatic</source>
++        <translation>自動調整</translation>
++    </message>
++    <message>
++        <source>Fixed</source>
++        <translation>固定比例</translation>
++    </message>
++    <message>
++        <source>Fixed FEC percentage</source>
++        <translation>固定 FEC 比例</translation>
+     </message>
+ </context>
+ <context>
+--- /dev/null
++++ b/app/settings/esp32inputsettings.cpp
+@@ -0,0 +1,117 @@
++#include "esp32inputsettings.h"
++#include "../streaming/input/esp32keyboardrouter.h"
++
++#include <QSettings>
++#include <QUrlQuery>
++#include <QRegularExpression>
++#include <QSet>
++
++namespace {
++bool validUuid(const QString& uuid)
++{
++    return !uuid.isEmpty() && !uuid.contains('/') && !uuid.contains('\\');
++}
++const char* const Fields[] = {
++    "enabled", "address", "port", "access_key", "mouse_enabled", "mouse_buttons", "keyboard_enabled",
++    "excluded_keys", "shortcut_pause", "shortcut_reconnect", "shortcut_release"};
++}
++
++QVariantMap Esp32InputSettings::load(const QString& hostUuid)
++{
++    QVariantMap values{{"enabled", false}, {"address", QString()}, {"port", 80},
++                       {"access_key", QString()}, {"mouse_enabled", true}, {"mouse_buttons", 31}, {"keyboard_enabled", false},
++                       {"excluded_keys", QString()}, {"shortcut_pause", 9}, {"shortcut_reconnect", 10}, {"shortcut_release", 11}};
++    if (!validUuid(hostUuid)) return values;
++    QSettings settings;
++    settings.beginGroup(QStringLiteral("ESP32Hosts/" ) + hostUuid);
++    for (const auto* field : Fields) values[field] = settings.value(field, values[field]);
++    return values;
++}
++
++QUrl Esp32InputSettings::endpoint(const QVariantMap& values)
++{
++    auto address = values.value("address").toString().trimmed();
++    if (!address.contains(QStringLiteral("://"))) address.prepend(QStringLiteral("ws://"));
++    QUrl url(address, QUrl::StrictMode);
++    if (url.scheme() == QStringLiteral("http")) url.setScheme(QStringLiteral("ws"));
++    if (url.scheme() == QStringLiteral("https")) url.setScheme(QStringLiteral("wss"));
++    const auto key = values.value("access_key").toString();
++    bool portOk = false;
++    const int port = values.value("port", 80).toInt(&portOk);
++    if (!url.isValid() || url.host().isEmpty() ||
++        (url.scheme() != QStringLiteral("ws") && url.scheme() != QStringLiteral("wss")) ||
++        !url.userInfo().isEmpty() || url.hasQuery() || url.hasFragment() ||
++        (!url.path().isEmpty() && url.path() != QStringLiteral("/") && url.path() != QStringLiteral("/ws")) ||
++        !portOk || values.value("port", 80).toDouble() != port || port < 1 || port > 65535 ||
++        (url.port() != -1 && url.port() != port) || key.size() != 6) return {};
++    url.setPort(port);
++    url.setPath(QStringLiteral("/ws"));
++    QUrlQuery query;
++    query.addQueryItem(QStringLiteral("key"), key);
++    url.setQuery(query);
++    return url;
++}
++
++QString Esp32InputSettings::save(const QString& hostUuid, const QVariantMap& values)
++{
++    if (!validUuid(hostUuid)) return QStringLiteral("无法识别这台主机，请重新打开设置。");
++    auto merged = load(hostUuid);
++    for (const auto* field : Fields) if (values.contains(field)) merged[field] = values[field];
++    if (merged.value("enabled").toBool() && endpoint(merged).isEmpty())
++        return QStringLiteral("请填写有效的 IP／域名、1–65535 的端口和 6 位控制密钥。地址中的端口须与端口栏一致。");
++    bool buttonsOk = false;
++    const int buttons = merged.value("mouse_buttons").toInt(&buttonsOk);
++    if (!buttonsOk || merged.value("mouse_buttons").toDouble() != buttons || buttons < 0 || buttons > 31)
++        return QStringLiteral("鼠标按钮选择无效，请重新选择。");
++    if (merged.value("enabled").toBool() && !merged.value("keyboard_enabled").toBool() &&
++        (!merged.value("mouse_enabled").toBool() || buttons == 0))
++        return QStringLiteral("请至少启用键盘或一个鼠标按钮，或关闭 ESP32 主开关。");
++    QSet<int> shortcuts;
++    for (const auto* field : {"shortcut_pause", "shortcut_reconnect", "shortcut_release"}) {
++        bool ok = false;
++        const int key = merged.value(field).toInt(&ok);
++        if (!ok || merged.value(field).toDouble() != key || key < 0 || key > 12 || (key && shortcuts.contains(key)))
++            return QStringLiteral("快捷键请选择不重复的 F1–F12，或关闭该快捷键。");
++        if (key) shortcuts.insert(key);
++    }
++    QStringList excluded;
++    const auto tokens = merged.value("excluded_keys").toString().split(QRegularExpression(QStringLiteral("[,;，；\\s]+")), Qt::SkipEmptyParts);
++    if (tokens.size() > 128) return QStringLiteral("排除按键过多，请减少到 128 项以内。");
++    for (const auto& token : tokens) {
++        const auto code = canonicalKeyCode(token);
++        if (code.isEmpty()) return QStringLiteral("排除名单含无法识别的按键。请使用 A、F1、MetaLeft、ControlLeft 等名称。");
++        if (!excluded.contains(code)) excluded.append(code);
++    }
++    merged["excluded_keys"] = excluded.join(QStringLiteral(", "));
++    QSettings settings;
++    settings.beginGroup(QStringLiteral("ESP32Hosts/") + hostUuid);
++    // Write only known fields; an offline host retains its configuration.
++    for (const auto* field : Fields) settings.setValue(field, merged[field]);
++    settings.sync();
++    return settings.status() == QSettings::NoError ? QString() : QStringLiteral("无法保存设置，请检查配置目录的写入权限。");
++}
++
++QString Esp32InputSettings::canonicalKeyCode(const QString& token)
++{
++    auto name = token.trimmed();
++    if (name.size() == 1 && name.at(0).isLetter()) name = QStringLiteral("Key") + name.toUpper();
++    else if (name.size() == 1 && name.at(0).isDigit()) name.prepend(QStringLiteral("Digit"));
++    for (unsigned usage = 0; usage < 232; ++usage) {
++        const auto* code = esp32KeyboardCode(usage);
++        if (code && name.compare(QLatin1String(code), Qt::CaseInsensitive) == 0) return QLatin1String(code);
++    }
++    if (name.compare(QStringLiteral("ContextMenu"), Qt::CaseInsensitive) == 0) return QStringLiteral("ContextMenu");
++    for (unsigned i = 13; i <= 24; ++i) {
++        const auto function = QStringLiteral("F%1").arg(i);
++        if (name.compare(function, Qt::CaseInsensitive) == 0) return function;
++    }
++    return {};
++}
++
++void Esp32InputSettings::remove(const QString& hostUuid)
++{
++    if (!validUuid(hostUuid)) return;
++    QSettings settings;
++    settings.remove(QStringLiteral("ESP32Hosts/") + hostUuid);
++    settings.sync();
++}
+--- /dev/null
++++ b/app/settings/esp32inputsettings.h
+@@ -0,0 +1,14 @@
++#pragma once
++
++#include <QString>
++#include <QUrl>
++#include <QVariantMap>
++
++namespace Esp32InputSettings {
++QVariantMap load(const QString& hostUuid);
++// Empty return value means saved successfully. Errors never include secrets.
++QString save(const QString& hostUuid, const QVariantMap& values);
++void remove(const QString& hostUuid);
++QUrl endpoint(const QVariantMap& values);
++QString canonicalKeyCode(const QString& token);
++}
+--- a/app/settings/streamingpreferences.cpp
++++ b/app/settings/streamingpreferences.cpp
+@@ -231,6 +231,14 @@
+     fps = settings.value(SER_FPS, 60).toInt();
+     enableYUV444 = settings.value(SER_YUV444, false).toBool();
+     bitrateKbps = settings.value(SER_BITRATE, getDefaultBitrate(width, height, fps, enableYUV444)).toInt();
++    fecPercentage = settings.value("fecPercentage", -2).toInt();
++    if (fecPercentage < -2 || fecPercentage > 100)
++        fecPercentage = -2;
++    // Keep the user's fixed value when switching to automatic or host default.
++    fixedFecPercentage =
++        fecPercentage >= 0 ? fecPercentage : settings.value("fixedFecPercentage", 20).toInt();
++    if (fixedFecPercentage < 0 || fixedFecPercentage > 100)
++        fixedFecPercentage = 20;
+     autoAdjustBitrate = settings.value(SER_AUTOADJUSTBITRATE, true).toBool();
+     enableSunshineAbr = settings.value(SER_SUNSHINEABR, false).toBool();
+     ignoreAspectRatio = settings.value(SER_IGNORE_ASPECT_RATIO, true).toBool();
+@@ -658,6 +666,9 @@
+     settings.setValue(SER_HEIGHT, height);
+     settings.setValue(SER_FPS, fps);
+     settings.setValue(SER_BITRATE, bitrateKbps);
++    settings.setValue("fecPercentage", fecPercentage);
++    settings.setValue("fixedFecPercentage",
++                      fecPercentage >= 0 ? fecPercentage : fixedFecPercentage);
+     settings.setValue(SER_AUTOADJUSTBITRATE, autoAdjustBitrate);
+     settings.setValue(SER_SUNSHINEABR, enableSunshineAbr);
+     settings.setValue(SER_IGNORE_ASPECT_RATIO, ignoreAspectRatio);
+--- a/app/settings/streamingpreferences.h
++++ b/app/settings/streamingpreferences.h
+@@ -203,6 +203,8 @@
+     Q_PROPERTY(int width MEMBER width NOTIFY displayModeChanged)
+     Q_PROPERTY(int height MEMBER height NOTIFY displayModeChanged)
+     Q_PROPERTY(int fps MEMBER fps NOTIFY displayModeChanged)
++    Q_PROPERTY(int fecPercentage MEMBER fecPercentage NOTIFY fecChanged)
++    Q_PROPERTY(int fixedFecPercentage MEMBER fixedFecPercentage NOTIFY fixedFecChanged)
+     Q_PROPERTY(int bitrateKbps MEMBER bitrateKbps NOTIFY bitrateChanged)
+     Q_PROPERTY(bool autoAdjustBitrate MEMBER autoAdjustBitrate NOTIFY autoAdjustBitrateChanged)
+     Q_PROPERTY(bool enableSunshineAbr MEMBER enableSunshineAbr NOTIFY enableSunshineAbrChanged)
+@@ -275,6 +277,8 @@
+     int width;
+     int height;
+     int fps;
++    int fecPercentage;
++    int fixedFecPercentage;
+     int bitrateKbps;
+     bool autoAdjustBitrate;
+     bool enableSunshineAbr;
+@@ -339,6 +343,8 @@
+ 
+ signals:
+     void displayModeChanged();
++    void fecChanged();
++    void fixedFecChanged();
+     void bitrateChanged();
+     void autoAdjustBitrateChanged();
+     void enableSunshineAbrChanged();
+--- /dev/null
++++ b/app/streaming/input/esp32inputstatus.h
+@@ -0,0 +1,21 @@
++#pragma once
++
++#include <cstdint>
++#include <functional>
++
++// Value snapshot. Readers can outlive the input facade and run on the decoder
++// thread; they capture shared atomic transport state, never SDL router state.
++struct Esp32InputStatus
++{
++    bool enabled = false;
++    bool configured = false;
++    bool ready = false;
++    bool paused = false;
++    int rttMs = -1;
++    unsigned reconnects = 0;
++    bool keyboardUsb = false;
++    std::uint8_t mouseButtons = 0;
++    bool hasExcludedKeys = false;
++};
++
++using Esp32StatusReader = std::function<Esp32InputStatus()>;
+--- /dev/null
++++ b/app/streaming/input/esp32keyboardrouter.h
+@@ -0,0 +1,119 @@
++#pragma once
++
++#include <array>
++#include <cstdint>
++
++// A local shortcut's final key must stay local until its matching physical up.
++// This also consumes a stale fresh down if focus loss swallowed the old up,
++// preventing a native down followed by an accidentally consumed native up.
++class Esp32LocalShortcutLatch
++{
++public:
++    void latch(unsigned usage) { if (usage < m_Down.size()) m_Down[usage] = true; }
++    bool consume(unsigned usage, bool down)
++    {
++        if (usage >= m_Down.size() || !m_Down[usage]) return false;
++        if (!down) m_Down[usage] = false;
++        return true;
++    }
++private:
++    std::array<bool, 512> m_Down{};
++};
++
++// SDL keyboard scancodes use USB HID usages for these keys. Names are the
++// existing firmware's protocol codes, not layout-dependent characters.
++inline const char* esp32KeyboardCode(unsigned usage)
++{
++    static const char* const letters[] = {
++        "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI",
++        "KeyJ", "KeyK", "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR",
++        "KeyS", "KeyT", "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ"};
++    static const char* const numbers[] = {
++        "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7", "Digit8", "Digit9", "Digit0"};
++    static const char* const punctuation[] = {
++        "Enter", "Escape", "Backspace", "Tab", "Space", "Minus", "Equal", "BracketLeft",
++        "BracketRight", "Backslash", nullptr, "Semicolon", "Quote", "Backquote", "Comma",
++        "Period", "Slash", "CapsLock"};
++    static const char* const functions[] = {
++        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"};
++    static const char* const navigation[] = {
++        "PrintScreen", "ScrollLock", "Pause", "Insert", "Home", "PageUp", "Delete", "End",
++        "PageDown", "ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "NumLock",
++        "NumpadDivide", "NumpadMultiply", "NumpadSubtract", "NumpadAdd", "NumpadEnter",
++        "Numpad1", "Numpad2", "Numpad3", "Numpad4", "Numpad5", "Numpad6", "Numpad7",
++        "Numpad8", "Numpad9", "Numpad0", "NumpadDecimal"};
++    static const char* const modifiers[] = {
++        "ControlLeft", "ShiftLeft", "AltLeft", "MetaLeft",
++        "ControlRight", "ShiftRight", "AltRight", "MetaRight"};
++    if (usage >= 4 && usage <= 29) return letters[usage - 4];
++    if (usage >= 30 && usage <= 39) return numbers[usage - 30];
++    if (usage >= 40 && usage <= 57) return punctuation[usage - 40];
++    if (usage >= 58 && usage <= 69) return functions[usage - 58];
++    if (usage >= 70 && usage <= 99) return navigation[usage - 70];
++    if (usage >= 224 && usage <= 231) return modifiers[usage - 224];
++    return nullptr;
++}
++
++class Esp32KeyboardRouter
++{
++public:
++    static constexpr unsigned MaxKeys = 16;
++
++    struct Report {
++        bool send = false;
++        std::uint8_t modifiers = 0;
++        std::array<unsigned, MaxKeys> keys{};
++    };
++
++    Report handle(unsigned usage, bool down, std::uint64_t epoch)
++    {
++        if (m_Epoch != epoch) {
++            cancel();
++            m_Epoch = epoch;
++        }
++        if (usage >= m_Owners.size() || !esp32KeyboardCode(usage)) return {};
++        auto& owner = m_Owners[usage];
++        if (down) {
++            if (owner != Released) return {};
++            // Offline or over-capacity presses need physical up before reuse.
++            if (epoch == 0 || (usage < 224 && keyCount() >= MaxKeys)) {
++                owner = Suppressed;
++                return {};
++            }
++            owner = Usb;
++            return report();
++        }
++        const bool send = owner == Usb && epoch != 0;
++        owner = Released;
++        return send ? report() : Report{};
++    }
++
++    void cancel()
++    {
++        for (auto& owner : m_Owners) if (owner == Usb) owner = Suppressed;
++    }
++
++private:
++    enum Owner : std::uint8_t { Released, Usb, Suppressed };
++    unsigned keyCount() const
++    {
++        unsigned count = 0;
++        for (unsigned i = 4; i < 224; ++i) if (m_Owners[i] == Usb) ++count;
++        return count;
++    }
++    Report report() const
++    {
++        Report result;
++        result.send = true;
++        unsigned slot = 0;
++        for (unsigned i = 4; i < 224; ++i) {
++            if (m_Owners[i] == Usb) result.keys[slot++] = i;
++        }
++        for (unsigned i = 224; i < 232; ++i) {
++            if (m_Owners[i] == Usb) result.modifiers |= 1u << (i - 224);
++        }
++        return result;
++    }
++    std::array<Owner, 232> m_Owners{};
++    std::uint64_t m_Epoch = 0;
++};
+--- /dev/null
++++ b/app/streaming/input/esp32mousebridge.cpp
+@@ -0,0 +1,545 @@
++#include "esp32mousebridge.h"
++#include "esp32mouserouter.h"
++#include "esp32keyboardrouter.h"
++#include "../../settings/esp32inputsettings.h"
++
++#include <QCoreApplication>
++#include <QDebug>
++#include <QElapsedTimer>
++#include <QFile>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QThread>
++#include <QTimer>
++#include <QUrl>
++#include <QUrlQuery>
++#include <QWebSocket>
++#include <QSet>
++
++#include <atomic>
++#include <limits>
++
++namespace {
++constexpr unsigned MaxPendingReports = 256;
++constexpr qint64 MaxPendingBytes = 64 * 1024;
++const char* const ButtonNames[] = {"left", "right", "middle", "back", "forward"};
++
++struct State {
++    std::atomic<std::uint64_t> epoch{0};
++    std::atomic<std::uint64_t> inputGeneration{0};
++    std::atomic<std::uint64_t> keyboardGeneration{0};
++    std::atomic<unsigned> pending{0};
++    std::atomic<int> rttMs{-1};
++    std::atomic<unsigned> reconnects{0};
++    std::atomic<bool> paused{false};
++};
++
++struct Config {
++    QUrl url;
++    std::uint8_t buttons = 0;
++    bool valid = false;
++    bool keyboard = false;
++    bool enabled = false;
++    QSet<unsigned> excluded;
++};
++
++Config loadConfig(const QString& hostName, const QString& hostUuid, const QString& configPath)
++{
++    Config config;
++    if (configPath.isEmpty()) {
++        // Normal sessions use the same QSettings store as Moonlight, keyed by
++        // host UUID. A test-only path keeps protocol tests independent of it.
++        const auto values = Esp32InputSettings::load(hostUuid);
++        if (!values.value("enabled").toBool()) return config;
++        config.enabled = true;
++        config.keyboard = values.value("keyboard_enabled").toBool();
++        const auto excluded = values.value("excluded_keys").toString().split(',', Qt::SkipEmptyParts);
++        for (const auto& token : excluded) {
++            const auto code = Esp32InputSettings::canonicalKeyCode(token);
++            if (code.isEmpty()) continue;
++            for (unsigned usage = 0; usage < 232; ++usage) {
++                const auto* name = esp32KeyboardCode(usage);
++                if (name && code == QLatin1String(name)) config.excluded.insert(usage);
++            }
++            for (unsigned i = 13; i <= 24; ++i) {
++                if (code == QStringLiteral("F%1").arg(i)) config.excluded.insert(104 + i - 13);
++            }
++            if (code == QStringLiteral("ContextMenu")) config.excluded.insert(101);
++        }
++        const int buttons = values.value("mouse_buttons").toInt();
++        config.buttons = values.value("mouse_enabled").toBool() && buttons >= 0 && buttons <= 31 ? buttons : 0;
++        config.url = Esp32InputSettings::endpoint(values);
++        config.valid = !config.url.isEmpty() && (config.buttons != 0 || config.keyboard);
++        if (!config.valid) qWarning("ESP32 input: invalid host configuration; exclusive keyboard stays blocked");
++        return config;
++    }
++    QFile file(configPath);
++    if (!file.exists()) return config;
++    if (!file.open(QIODevice::ReadOnly) || file.size() > 16384) {
++        qWarning("ESP32 mouse: cannot read configuration");
++        return config;
++    }
++    QJsonParseError error;
++    const auto doc = QJsonDocument::fromJson(file.readAll(), &error);
++    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
++        qWarning("ESP32 mouse: invalid configuration JSON");
++        return config;
++    }
++    const auto object = doc.object();
++    if (!object.value(QStringLiteral("enabled")).toBool(false)) return config;
++    const auto uuid = object.value(QStringLiteral("target_uuid")).toString();
++    const auto name = object.value(QStringLiteral("target_host")).toString();
++    // A UUID takes priority. Never silently send input to another streamed host.
++    if ((!uuid.isEmpty() && uuid != hostUuid) ||
++        (uuid.isEmpty() && (name.isEmpty() || name.compare(hostName, Qt::CaseInsensitive) != 0))) {
++        qInfo("ESP32 mouse: configuration does not match this streamed host");
++        return config;
++    }
++    config.enabled = true;
++    config.keyboard = object.value(QStringLiteral("keyboard_enabled")).toBool(false);
++    auto address = object.value(QStringLiteral("address")).toString().trimmed();
++    if (!address.contains(QStringLiteral("://"))) address.prepend(QStringLiteral("ws://"));
++    QUrl url(address, QUrl::StrictMode);
++    if (url.scheme() == QStringLiteral("http")) url.setScheme(QStringLiteral("ws"));
++    if (url.scheme() == QStringLiteral("https")) url.setScheme(QStringLiteral("wss"));
++    const auto path = url.path();
++    const auto portValue = object.value(QStringLiteral("port"));
++    const int separatePort = portValue.toInt(-1);
++    const auto key = object.value(QStringLiteral("access_key")).toString();
++    if (!url.isValid() || url.host().isEmpty() ||
++        (url.scheme() != QStringLiteral("ws") && url.scheme() != QStringLiteral("wss")) ||
++        !url.userInfo().isEmpty() || url.hasQuery() || url.hasFragment() ||
++        (path != QString() && path != QStringLiteral("/") && path != QStringLiteral("/ws")) ||
++        url.port() == 0 || key.size() != 6 ||
++        (!portValue.isUndefined() && (!portValue.isDouble() ||
++            portValue.toDouble() != separatePort || separatePort < 1)) ||
++        (separatePort != -1 && (separatePort < 1 || separatePort > 65535 ||
++            (url.port() != -1 && separatePort != url.port())))) {
++        qWarning("ESP32 mouse: invalid address, key, or conflicting port");
++        return config;
++    }
++    if (separatePort != -1) url.setPort(separatePort);
++    url.setPath(QStringLiteral("/ws"));
++    QUrlQuery query;
++    query.addQueryItem(QStringLiteral("key"), key);
++    url.setQuery(query);
++    for (const auto& button : object.value(QStringLiteral("buttons")).toArray()) {
++        bool found = false;
++        for (unsigned i = 0; i < 5; ++i) {
++            if (button.isString() && button.toString() == QLatin1String(ButtonNames[i])) {
++                config.buttons |= 1u << i;
++                found = true;
++            }
++        }
++        if (!found) {
++            qWarning("ESP32 mouse: unknown button in configuration");
++            return Config{};
++        }
++    }
++    if (config.buttons == 0 && !config.keyboard) {
++        qWarning("ESP32 mouse: no mouse buttons selected");
++        return config;
++    }
++    config.url = url;
++    config.valid = true;
++    return config;
++}
++
++class Worker : public QObject
++{
++public:
++    Worker(Config config, std::shared_ptr<State> state, std::function<void(const QString&)> notify)
++        : m_Config(std::move(config)), m_State(std::move(state)), m_Notify(std::move(notify)) {}
++
++    void start()
++    {
++        status(QStringLiteral("ESP32 正在连接"));
++        m_Socket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
++        m_Socket->setMaxAllowedIncomingFrameSize(4096);
++        m_Socket->setMaxAllowedIncomingMessageSize(4096);
++        m_Reconnect = new QTimer(this);
++        m_Reconnect->setSingleShot(true);
++        m_Deadline = new QTimer(this);
++        m_Deadline->setSingleShot(true);
++        m_Ping = new QTimer(this);
++        m_Ping->setInterval(200);
++        connect(m_Reconnect, &QTimer::timeout, this, [this] { open(); });
++        connect(m_Deadline, &QTimer::timeout, this, [this] { fail(); });
++        connect(m_Ping, &QTimer::timeout, this, [this] {
++            if (m_State->epoch.load() != 0) {
++                if (m_LastPong.elapsed() > 3000) { fail(); return; }
++                if (send(QStringLiteral("ping")) && ++m_PingTicks % 5 == 0) {
++                    m_PingToken = QByteArray::number(++m_PingSerial);
++                    m_Socket->ping(m_PingToken);
++                }
++            }
++        });
++        connect(m_Socket, &QWebSocket::pong, this, [this](quint64 elapsed, const QByteArray& payload) {
++            if (m_State->epoch.load() == 0 || payload != m_PingToken || m_PingToken.isEmpty()) return;
++            m_LastPong.start();
++            m_State->rttMs.store(static_cast<int>(qMin<quint64>(elapsed, 60000)));
++        });
++        connect(m_Socket, &QWebSocket::connected, this, [this] {
++            m_Sequence = 0;
++            m_AwaitingHello = true;
++            QJsonObject fields;
++            fields.insert(QStringLiteral("protocol"), 2);
++            fields.insert(QStringLiteral("client"), QStringLiteral("moonlight-vplus-esp32-nkro"));
++            send(QStringLiteral("hello"), fields);
++        });
++        connect(m_Socket, &QWebSocket::textMessageReceived, this, [this](const QString& text) {
++            QJsonParseError error;
++            const auto doc = QJsonDocument::fromJson(text.toUtf8(), &error);
++            if (error.error != QJsonParseError::NoError || !doc.isObject()) {
++                fail(); return;
++            }
++            const auto message = doc.object();
++            const auto type = message.value(QStringLiteral("type")).toString();
++            if (type == QStringLiteral("error")) {
++                qWarning("ESP32 mouse: protocol rejected; check control key and other controllers");
++                fail(); return;
++            }
++            if (m_AwaitingHello && type == QStringLiteral("macro_status") &&
++                message.value(QStringLiteral("running")).isBool() &&
++                !message.value(QStringLiteral("running")).toBool()) {
++                if (message.value(QStringLiteral("protocol")).toDouble() != 2 ||
++                    !message.value(QStringLiteral("keyboard_nkro")).toBool(false) ||
++                    message.value(QStringLiteral("keyboard_max_keys")).toDouble() != Esp32KeyboardRouter::MaxKeys) {
++                    fail(QStringLiteral("ESP32 固件不匹配：请烧录协议 2 NKRO 固件"));
++                    return;
++                }
++                m_AwaitingHello = false;
++                if (!send(QStringLiteral("release_all"))) return;
++                m_Deadline->stop();
++                m_LastPong.start();
++                m_PingTicks = 0;
++                m_State->epoch.store(++m_NextEpoch);
++                m_State->reconnects.store(static_cast<unsigned>(m_NextEpoch - 1));
++                m_Ping->start();
++                status(m_State->paused.load() ? QStringLiteral("ESP32 已连接；USB 输入仍处于暂停状态") :
++                       m_Config.keyboard ? QStringLiteral("ESP32 已连接：键盘通过 USB，Moonlight 键盘发送已屏蔽")
++                                         : QStringLiteral("ESP32 已连接：USB 鼠标点击已启用"));
++                qInfo("ESP32 input: USB route ready; protocol 2 NKRO");
++            }
++        });
++        connect(m_Socket, &QWebSocket::disconnected, this, [this] { fail(); });
++        connect(m_Socket, &QWebSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
++            // Do not log the request URL/error text: the query contains the key.
++            fail();
++        });
++        open();
++    }
++
++    void mouse(std::uint64_t epoch, std::uint8_t buttons)
++    {
++        if (epoch == 0 || epoch != m_State->epoch.load()) return;
++        QJsonArray array;
++        for (unsigned i = 0; i < 5; ++i) {
++            if (buttons & (1u << i)) array.append(QLatin1String(ButtonNames[i]));
++        }
++        QJsonObject fields;
++        fields.insert(QStringLiteral("buttons"), array);
++        send(QStringLiteral("mouse_state"), fields);
++    }
++
++    void keyboard(std::uint64_t epoch, const Esp32KeyboardRouter::Report& report)
++    {
++        if (epoch == 0 || epoch != m_State->epoch.load()) return;
++        QJsonArray modifiers, keys;
++        for (unsigned i = 0; i < 8; ++i) {
++            if (report.modifiers & (1u << i)) modifiers.append(QLatin1String(esp32KeyboardCode(224 + i)));
++        }
++        for (auto usage : report.keys) {
++            if (usage) keys.append(QLatin1String(esp32KeyboardCode(usage)));
++        }
++        send(QStringLiteral("state"), {{QStringLiteral("modifiers"), modifiers}, {QStringLiteral("keys"), keys}});
++    }
++
++    void release()
++    {
++        if (m_State->epoch.load() != 0) send(QStringLiteral("release_all"));
++    }
++
++    void stop()
++    {
++        m_Stopping = true;
++        m_Reconnect->stop(); m_Deadline->stop(); m_Ping->stop();
++        release();
++        m_State->epoch.store(0);
++        m_Socket->flush();
++        m_Socket->close();
++    }
++
++    void reconnect()
++    {
++        if (m_Stopping) return;
++        m_Failing = true;
++        if (m_Socket->state() == QAbstractSocket::ConnectedState && !m_AwaitingHello)
++            send(QStringLiteral("release_all"));
++        m_State->epoch.store(0);
++        m_State->rttMs.store(-1);
++        m_Ping->stop(); m_Deadline->stop(); m_Reconnect->stop();
++        m_AwaitingHello = false;
++        m_Socket->flush();
++        m_Socket->abort();
++        m_Failing = false;
++        status(QStringLiteral("ESP32 正在重新连接"));
++        open();
++    }
++
++    void fail(const QString& reason = QString())
++    {
++        const bool wasReady = m_State->epoch.exchange(0) != 0;
++        m_State->rttMs.store(-1);
++        if (m_Failing || m_Stopping) return;
++        m_Failing = true;
++        m_AwaitingHello = false;
++        m_Ping->stop(); m_Deadline->stop();
++        m_Socket->abort();
++        if (wasReady) qWarning("ESP32 input: USB route lost; retrying");
++        status(!reason.isEmpty() ? reason : m_Config.keyboard ? QStringLiteral("ESP32 未连接：键盘发送已暂停，正在重连；退出快捷键仍可使用")
++                                 : QStringLiteral("ESP32 未连接：正在重连，鼠标点击暂用 Moonlight"));
++        if (!m_Reconnect->isActive()) m_Reconnect->start(2000);
++        m_Failing = false;
++    }
++
++private:
++    void status(const QString& text)
++    {
++        if (text == m_LastStatus) return;
++        m_LastStatus = text;
++        if (m_Notify) m_Notify(text);
++    }
++
++    void open()
++    {
++        if (m_Stopping) return;
++        m_State->epoch.store(0);
++        m_State->rttMs.store(-1);
++        m_PingToken.clear();
++        m_Deadline->start(5000);
++        qInfo("ESP32 input: connecting; exclusive keyboard never falls back to native");
++        m_Socket->open(m_Config.url);
++    }
++
++    bool send(const QString& type, QJsonObject message = {})
++    {
++        if (m_Sequence == std::numeric_limits<std::uint32_t>::max() ||
++            m_Socket->state() != QAbstractSocket::ConnectedState ||
++            m_Socket->bytesToWrite() > MaxPendingBytes) {
++            fail(); return false;
++        }
++        message.insert(QStringLiteral("type"), type);
++        message.insert(QStringLiteral("seq"), static_cast<double>(++m_Sequence));
++        const auto data = QString::fromUtf8(QJsonDocument(message).toJson(QJsonDocument::Compact));
++        if (m_Socket->sendTextMessage(data) <= 0) { fail(); return false; }
++        return true;
++    }
++
++    Config m_Config;
++    std::shared_ptr<State> m_State;
++    QWebSocket* m_Socket = nullptr;
++    QTimer* m_Reconnect = nullptr;
++    QTimer* m_Deadline = nullptr;
++    QTimer* m_Ping = nullptr;
++    std::uint32_t m_Sequence = 0;
++    std::uint64_t m_NextEpoch = 0;
++    bool m_Failing = false;
++    bool m_Stopping = false;
++    bool m_AwaitingHello = false;
++    QElapsedTimer m_LastPong;
++    unsigned m_PingTicks = 0;
++    unsigned m_PingSerial = 0;
++    QByteArray m_PingToken;
++    std::function<void(const QString&)> m_Notify;
++    QString m_LastStatus;
++};
++} // namespace
++
++struct Esp32MouseBridge::Impl {
++    Config config;
++    std::shared_ptr<State> state = std::make_shared<State>();
++    Esp32MouseRouter router;
++    Esp32KeyboardRouter keyboardRouter;
++    QThread thread;
++    Worker* worker = nullptr;
++    std::function<void(const QString&)> notify;
++};
++
++Esp32MouseBridge::Esp32MouseBridge(const QString& hostName, const QString& hostUuid,
++                                 const QString& configPath, std::function<void(const QString&)> notify)
++    : m_Impl(new Impl)
++{
++    m_Impl->config = loadConfig(hostName, hostUuid, configPath);
++    m_Impl->notify = notify;
++    if (!m_Impl->config.valid) return;
++    auto* worker = new Worker(m_Impl->config, m_Impl->state, std::move(notify));
++    m_Impl->worker = worker;
++    worker->moveToThread(&m_Impl->thread);
++    QObject::connect(&m_Impl->thread, &QThread::started, worker, [worker] { worker->start(); });
++    QObject::connect(&m_Impl->thread, &QThread::finished, worker, &QObject::deleteLater);
++    m_Impl->thread.start();
++}
++
++Esp32MouseBridge::~Esp32MouseBridge()
++{
++    if (!m_Impl->worker) return;
++    m_Impl->state->inputGeneration.fetch_add(1);
++    auto* worker = m_Impl->worker;
++    QMetaObject::invokeMethod(worker, [worker] { worker->stop(); }, Qt::BlockingQueuedConnection);
++    m_Impl->thread.quit();
++    m_Impl->thread.wait();
++}
++
++bool Esp32MouseBridge::handle(unsigned hidButton, bool down)
++{
++    if (!m_Impl->worker) return false;
++    const bool paused = m_Impl->state->paused.load();
++    const auto epoch = paused ? 0 : m_Impl->state->epoch.load();
++    const auto decision = m_Impl->router.handle(hidButton, down, epoch, m_Impl->config.buttons, paused);
++    if (decision.sendUsb) {
++        auto* worker = m_Impl->worker;
++        const auto state = m_Impl->state;
++        const auto generation = state->inputGeneration.load();
++        if (state->pending.fetch_add(1) >= MaxPendingReports) {
++            state->pending.fetch_sub(1);
++            // Invalidate this epoch immediately; pending frames cannot cross reconnects.
++            if (state->epoch.exchange(0) != 0) {
++                QMetaObject::invokeMethod(worker, [worker] { worker->fail(); }, Qt::QueuedConnection);
++            }
++        }
++        else {
++            QMetaObject::invokeMethod(worker, [worker, state, epoch, generation, buttons = decision.usbButtons] {
++                state->pending.fetch_sub(1);
++                if (generation == state->inputGeneration.load()) worker->mouse(epoch, buttons);
++            }, Qt::QueuedConnection);
++        }
++    }
++    return decision.consume;
++}
++
++bool Esp32MouseBridge::keyboardExclusive() const
++{
++    return m_Impl->config.keyboard;
++}
++
++bool Esp32MouseBridge::keyboardExcluded(unsigned scancode) const
++{
++    return keyboardExclusive() && m_Impl->config.excluded.contains(scancode);
++}
++
++bool Esp32MouseBridge::handleKeyboard(unsigned scancode, bool down, unsigned physicalScancode)
++{
++    if (!keyboardExclusive()) return false;
++    if (keyboardExcluded(physicalScancode ? physicalScancode : scancode)) return true;
++    if (!m_Impl->worker) return true;
++    const auto epoch = m_Impl->state->paused.load() ? 0 : m_Impl->state->epoch.load();
++    const auto report = m_Impl->keyboardRouter.handle(scancode, down, epoch);
++    if (report.send) {
++        auto* worker = m_Impl->worker;
++        const auto state = m_Impl->state;
++        const auto generation = state->inputGeneration.load();
++        const auto keyboardGeneration = state->keyboardGeneration.load();
++        if (state->pending.fetch_add(1) >= MaxPendingReports) {
++            state->pending.fetch_sub(1);
++            if (state->epoch.exchange(0) != 0)
++                QMetaObject::invokeMethod(worker, [worker] { worker->fail(); }, Qt::QueuedConnection);
++        }
++        else {
++            QMetaObject::invokeMethod(worker, [worker, state, epoch, generation, keyboardGeneration, report] {
++                state->pending.fetch_sub(1);
++                if (generation == state->inputGeneration.load() &&
++                    keyboardGeneration == state->keyboardGeneration.load()) worker->keyboard(epoch, report);
++            }, Qt::QueuedConnection);
++        }
++    }
++    // Unsupported keys are also consumed: never leak into the native path.
++    return true;
++}
++
++void Esp32MouseBridge::releaseKeyboard()
++{
++    if (!keyboardExclusive() || !m_Impl->worker) return;
++    m_Impl->keyboardRouter.cancel();
++    m_Impl->state->keyboardGeneration.fetch_add(1);
++    const auto epoch = m_Impl->state->epoch.load();
++    auto* worker = m_Impl->worker;
++    QMetaObject::invokeMethod(worker, [worker, epoch] {
++        worker->keyboard(epoch, Esp32KeyboardRouter::Report{});
++    }, Qt::QueuedConnection);
++}
++
++bool Esp32MouseBridge::ready() const
++{
++    return m_Impl->state->epoch.load() != 0;
++}
++
++bool Esp32MouseBridge::configured() const
++{
++    return m_Impl->worker != nullptr;
++}
++
++Esp32InputStatus Esp32MouseBridge::status() const
++{
++    Esp32InputStatus result;
++    result.enabled = m_Impl->config.enabled;
++    result.configured = configured();
++    result.ready = ready();
++    result.paused = m_Impl->state->paused.load();
++    result.rttMs = result.ready ? m_Impl->state->rttMs.load() : -1;
++    result.reconnects = m_Impl->state->reconnects.load();
++    result.keyboardUsb = keyboardExclusive();
++    result.mouseButtons = m_Impl->config.buttons;
++    result.hasExcludedKeys = !m_Impl->config.excluded.isEmpty();
++    return result;
++}
++
++Esp32StatusReader Esp32MouseBridge::statusReader() const
++{
++    const auto state = m_Impl->state;
++    const auto configuration = status();
++    // No facade, worker or Session pointer is captured. All changing fields
++    // are atomic, so decoding never reads the SDL-thread routing state.
++    return [state, configuration] {
++        auto snapshot = configuration;
++        snapshot.ready = state->epoch.load() != 0;
++        snapshot.paused = state->paused.load();
++        snapshot.rttMs = snapshot.ready ? state->rttMs.load() : -1;
++        snapshot.reconnects = state->reconnects.load();
++        return snapshot;
++    };
++}
++
++std::uint8_t Esp32MouseBridge::setPaused(bool paused)
++{
++    const auto native = releaseAll();
++    m_Impl->state->paused.store(paused);
++    if (m_Impl->notify) m_Impl->notify(paused ? QStringLiteral("ESP32 USB 输入已暂停；本地退出快捷键仍可使用")
++                                            : ready() ? QStringLiteral("ESP32 USB 输入已恢复；请松开后重新按键")
++                                                      : QStringLiteral("ESP32 已取消暂停，等待连接；请松开后重新按键"));
++    return native;
++}
++
++std::uint8_t Esp32MouseBridge::reconnect()
++{
++    const auto native = releaseAll();
++    if (m_Impl->worker) {
++        // Invalidate ready immediately so input cannot race the worker's abort.
++        m_Impl->state->epoch.store(0);
++        auto* worker = m_Impl->worker;
++        QMetaObject::invokeMethod(worker, [worker] { worker->reconnect(); }, Qt::QueuedConnection);
++    }
++    return native;
++}
++
++std::uint8_t Esp32MouseBridge::releaseAll()
++{
++    if (!m_Impl->worker) return 0;
++    const auto native = m_Impl->router.cancel();
++    m_Impl->keyboardRouter.cancel();
++    m_Impl->state->inputGeneration.fetch_add(1);
++    auto* worker = m_Impl->worker;
++    QMetaObject::invokeMethod(worker, [worker] { worker->release(); }, Qt::QueuedConnection);
++    return native;
++}
+--- /dev/null
++++ b/app/streaming/input/esp32mousebridge.h
+@@ -0,0 +1,38 @@
++#pragma once
++
++#include "esp32inputstatus.h"
++
++#include <QString>
++#include <cstdint>
++#include <functional>
++#include <memory>
++
++// SDL-thread facade. All network I/O lives on a separate Qt event-loop thread.
++class Esp32MouseBridge
++{
++public:
++    Esp32MouseBridge(const QString& hostName, const QString& hostUuid,
++                     const QString& configPath = QString(),
++                     std::function<void(const QString&)> notify = {});
++    ~Esp32MouseBridge();
++    Esp32MouseBridge(const Esp32MouseBridge&) = delete;
++    Esp32MouseBridge& operator=(const Esp32MouseBridge&) = delete;
++
++    bool handle(unsigned hidButton, bool down);
++    // True consumes the event, including while disconnected in exclusive mode.
++    bool handleKeyboard(unsigned scancode, bool down, unsigned physicalScancode = 0);
++    bool keyboardExclusive() const;
++    bool keyboardExcluded(unsigned scancode) const;
++    void releaseKeyboard();
++    bool ready() const;
++    bool configured() const;
++    Esp32InputStatus status() const;
++    Esp32StatusReader statusReader() const;
++    std::uint8_t setPaused(bool paused);
++    std::uint8_t reconnect();
++    std::uint8_t releaseAll();
++
++private:
++    struct Impl;
++    std::unique_ptr<Impl> m_Impl;
++};
+--- /dev/null
++++ b/app/streaming/input/esp32mouserouter.h
+@@ -0,0 +1,74 @@
++#pragma once
++
++#include <array>
++#include <cstdint>
++
++// Pure state machine, used only by the SDL input thread. Buttons use HID bit order:
++// left, right, middle, back, forward. A connection epoch changes on every reconnect.
++class Esp32MouseRouter
++{
++public:
++    struct Decision {
++        bool consume = true;
++        bool sendUsb = false;
++        std::uint8_t usbButtons = 0;
++    };
++
++    Decision handle(unsigned button, bool down, std::uint64_t epoch,
++                    std::uint8_t selected = 0x1f, bool suppressOffline = false)
++    {
++        if (button >= m_Owners.size()) {
++            return {false, false, m_UsbButtons};
++        }
++        if (epoch != m_Epoch) {
++            for (auto& owner : m_Owners) {
++                if (owner == Owner::Usb) owner = Owner::Suppressed;
++            }
++            m_UsbButtons = 0;
++            m_Epoch = epoch;
++        }
++        auto& owner = m_Owners[button];
++        const auto bit = static_cast<std::uint8_t>(1u << button);
++        if (down) {
++            // Repeated downs never select a second route, even after reconnect.
++            if (owner != Owner::None) return {true, false, m_UsbButtons};
++            if (epoch != 0 && (selected & bit)) {
++                owner = Owner::Usb;
++                m_UsbButtons |= bit;
++                return {true, true, m_UsbButtons};
++            }
++            if (suppressOffline && (selected & bit)) {
++                owner = Owner::Suppressed;
++                return {true, false, m_UsbButtons};
++            }
++            owner = Owner::Native;
++            return {false, false, m_UsbButtons};
++        }
++        const auto previous = owner;
++        owner = Owner::None;
++        if (previous == Owner::Usb) {
++            m_UsbButtons &= static_cast<std::uint8_t>(~bit);
++            return {true, true, m_UsbButtons};
++        }
++        return {previous != Owner::Native, false, m_UsbButtons};
++    }
++
++    // Caller sends native releases for this mask and releases the USB session.
++    // Suppress held inputs until their physical up arrives; no held-state replay.
++    std::uint8_t cancel()
++    {
++        std::uint8_t native = 0;
++        for (unsigned i = 0; i < m_Owners.size(); ++i) {
++            if (m_Owners[i] == Owner::Native) native |= 1u << i;
++            if (m_Owners[i] != Owner::None) m_Owners[i] = Owner::Suppressed;
++        }
++        m_UsbButtons = 0;
++        return native;
++    }
++
++private:
++    enum class Owner { None, Native, Usb, Suppressed };
++    std::array<Owner, 5> m_Owners{};
++    std::uint8_t m_UsbButtons = 0;
++    std::uint64_t m_Epoch = 0;
++};
+--- /dev/null
++++ b/app/streaming/input/esp32performancestats.h
+@@ -0,0 +1,31 @@
++#pragma once
++
++#include "esp32inputstatus.h"
++#include <string>
++
++// ASCII matches the existing performance overlay and its bundled bitmap-style
++// font. No address, access key or typed input belongs in these statistics.
++inline std::string formatEsp32PerformanceStats(const Esp32InputStatus& state)
++{
++    if (!state.enabled) return "ESP32: off\n";
++    const std::string connection = !state.configured ? "configuration error" :
++                                   state.paused ? "paused" :
++                                   state.ready ? "connected" : "disconnected";
++    const std::string keyboard = !state.keyboardUsb ? "Moonlight" :
++                                 state.paused || !state.ready ? "blocked" : "USB";
++    unsigned buttons = 0;
++    for (unsigned i = 0; i < 5; ++i) if (state.mouseButtons & (1u << i)) ++buttons;
++    std::string mouse = "Moonlight";
++    if (buttons && (state.paused || state.ready)) {
++        mouse = state.paused ? "paused" : "USB";
++        if (buttons < 5) mouse += " " + std::to_string(buttons) + "/5";
++    }
++    return "ESP32: " + connection + " | Keyboard: " + keyboard +
++           " | Mouse buttons: " + mouse + "\n";
++}
++
++inline std::string appendEsp32PerformanceStats(std::string videoStats, const Esp32InputStatus& state)
++{
++    if (!videoStats.empty() && videoStats.back() != '\n') videoStats += '\n';
++    return videoStats + formatEsp32PerformanceStats(state);
++}
+--- a/app/streaming/input/input.cpp
++++ b/app/streaming/input/input.cpp
+@@ -1,5 +1,7 @@
+ #include <Limelight.h>
+ #include "SDL_compat.h"
++#include "esp32mousebridge.h"
++#include "settings/esp32inputsettings.h"
+ #include "streaming/session.h"
+ #include "settings/mappingmanager.h"
+ #include "path.h"
+@@ -12,6 +14,7 @@
+ #include <QtGlobal>
+ #include <QDir>
+ #include <QGuiApplication>
++#include <QPointer>
+ #ifdef Q_OS_MACOS
+ #include <QImage>
+ #endif
+@@ -80,7 +83,8 @@
+ } // namespace
+ 
+ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, int streamHeight,
+-                                 bool enablePhysicalDualSenseHaptics)
++                                 bool enablePhysicalDualSenseHaptics,
++                                 const QString& esp32HostName, const QString& esp32HostUuid)
+     : m_MultiController(prefs.multiController),
+       m_GamepadMouse(prefs.gamepadMouse),
+       m_EnableDualSenseHaptics(enablePhysicalDualSenseHaptics),
+@@ -160,6 +164,21 @@
+       m_DragButton(0),
+       m_NumFingersDown(0)
+ {
++    const QPointer<Session> esp32Session(Session::get());
++    m_Esp32Mouse = std::make_unique<Esp32MouseBridge>(esp32HostName, esp32HostUuid, QString(),
++        [esp32Session](const QString& message) {
++            if (!esp32Session) return;
++            esp32Session->queueEsp32Toast(message);
++        });
++
++    const auto esp32Settings = Esp32InputSettings::load(esp32HostUuid);
++    const char* const shortcutFields[] = {"shortcut_pause", "shortcut_reconnect", "shortcut_release"};
++    for (unsigned i = 0; i < m_Esp32ShortcutKeys.size(); ++i) {
++        const int function = esp32Settings.value(shortcutFields[i]).toInt();
++        if (function >= 1 && function <= 12)
++            m_Esp32ShortcutKeys[i] = static_cast<SDL_Scancode>(SDL_SCANCODE_F1 + function - 1);
++    }
++
+     // System keys are always captured when running without a DE
+     if (!WMUtils::isRunningDesktopEnvironment()) {
+         m_CaptureSystemKeysMode = StreamingPreferences::CSK_ALWAYS;
+@@ -349,6 +368,8 @@
+ 
+ SdlInputHandler::~SdlInputHandler()
+ {
++    releaseEsp32MouseButtons();
++    m_Esp32Mouse.reset();
+ #ifdef HAVE_WINDOWS_PEN_INPUT
+     shutdownWindowsPenInput();
+ #endif
+@@ -787,6 +808,7 @@
+ 
+ void SdlInputHandler::raiseAllKeys(bool clearKeys)
+ {
++    if (m_Esp32Mouse) m_Esp32Mouse->releaseKeyboard();
+     if (m_KeysDown.isEmpty()) {
+         return;
+     }
+@@ -824,6 +846,60 @@
+                     "Keeping %d keys marked down for a later retry",
+                     failedCount);
+     }
++}
++
++bool SdlInputHandler::routeEsp32MouseButton(int button, bool down)
++{
++    unsigned index;
++    switch (button) {
++    case BUTTON_LEFT: index = 0; break;
++    case BUTTON_RIGHT: index = 1; break;
++    case BUTTON_MIDDLE: index = 2; break;
++    case BUTTON_X1: index = 3; break;
++    case BUTTON_X2: index = 4; break;
++    default: return false;
++    }
++    return m_Esp32Mouse && m_Esp32Mouse->handle(index, down);
++}
++
++void SdlInputHandler::releaseEsp32MouseButtons()
++{
++    if (!m_Esp32Mouse) return;
++    releaseEsp32NativeButtons(m_Esp32Mouse->releaseAll());
++}
++
++void SdlInputHandler::releaseEsp32NativeButtons(std::uint8_t native)
++{
++    const int buttons[] = {BUTTON_LEFT, BUTTON_RIGHT, BUTTON_MIDDLE, BUTTON_X1, BUTTON_X2};
++    for (unsigned i = 0; i < 5; ++i) {
++        if (native & (1u << i)) LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, buttons[i]);
++    }
++}
++
++Esp32StatusReader SdlInputHandler::esp32StatsReader() const
++{
++    return m_Esp32Mouse ? m_Esp32Mouse->statusReader() : Esp32StatusReader{};
++}
++
++void SdlInputHandler::performEsp32Action(Esp32Action action)
++{
++    if (!m_Esp32Mouse || !m_Esp32Mouse->configured()) return;
++    // Local hotkey modifiers may have reached either input path already.
++    raiseAllKeys();
++    std::uint8_t native = 0;
++    switch (action) {
++    case Esp32Action::TogglePause:
++        native = m_Esp32Mouse->setPaused(!m_Esp32Mouse->status().paused);
++        break;
++    case Esp32Action::Reconnect:
++        native = m_Esp32Mouse->reconnect();
++        break;
++    case Esp32Action::ReleaseAll:
++        native = m_Esp32Mouse->releaseAll();
++        Session::get()->showStreamingToast(QStringLiteral("已请求释放全部输入；按住的键请松开后重按"));
++        break;
++    }
++    releaseEsp32NativeButtons(native);
+ }
+ 
+ void SdlInputHandler::notifyMouseLeave()
+@@ -850,6 +926,7 @@
+ 
+ void SdlInputHandler::notifyFocusLost()
+ {
++    releaseEsp32MouseButtons();
+     Uint32 windowFlags = SDL_GetWindowFlags(m_Window);
+ 
+     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+@@ -984,6 +1061,7 @@
+         }
+     }
+     else {
++        releaseEsp32MouseButtons();
+         // A capture transition can happen without a window focus event (for
+         // example, when the user explicitly releases input). Ensure Sunshine
+         // never retains contacts from the previous capture state.
+--- a/app/streaming/input/input.h
++++ b/app/streaming/input/input.h
+@@ -3,6 +3,8 @@
+ #include "settings/streamingpreferences.h"
+ #include "backend/computermanager.h"
+ #include "cursorshapeclassifier.h"
++#include "esp32inputstatus.h"
++#include "esp32keyboardrouter.h"
+ 
+ #include "SDL_compat.h"
+ 
+@@ -11,6 +13,11 @@
+ #include <QSet>
+ 
+ #include <atomic>
++#include <array>
++#include <cstdint>
++#include <memory>
++
++class Esp32MouseBridge;
+ 
+ #ifdef HAVE_WINDOWS_RAW_TOUCHPAD
+ #include <memory>
+@@ -134,7 +141,9 @@
+ {
+ public:
+     explicit SdlInputHandler(StreamingPreferences& prefs, int streamWidth, int streamHeight,
+-                             bool enablePhysicalDualSenseHaptics);
++                             bool enablePhysicalDualSenseHaptics,
++                             const QString& esp32HostName = QString(),
++                             const QString& esp32HostUuid = QString());
+ 
+     ~SdlInputHandler();
+ 
+@@ -198,6 +207,10 @@
+     int getAttachedGamepadMask();
+ 
+     void raiseAllKeys(bool clearKeys = true);
++
++    enum class Esp32Action { TogglePause, Reconnect, ReleaseAll };
++    Esp32StatusReader esp32StatsReader() const;
++    void performEsp32Action(Esp32Action action);
+     bool hasKeysDown() const { return !m_KeysDown.isEmpty(); }
+ 
+     void notifyMouseLeave();
+@@ -259,6 +272,13 @@
+     void setGamepadMouse(bool enabled) { m_GamepadMouse = enabled; }
+ 
+ private:
++    bool routeEsp32MouseButton(int button, bool down);
++    void releaseEsp32MouseButtons();
++    std::unique_ptr<Esp32MouseBridge> m_Esp32Mouse;
++    std::array<SDL_Scancode, 3> m_Esp32ShortcutKeys{};
++    Esp32LocalShortcutLatch m_Esp32ShortcutKeysDown;
++    void releaseEsp32NativeButtons(std::uint8_t native);
++
+     qreal getRemoteCursorScale() const;
+ 
+     GamepadState*
+--- a/app/streaming/input/keyboard.cpp
++++ b/app/streaming/input/keyboard.cpp
+@@ -1,4 +1,5 @@
+ #include "streaming/session.h"
++#include "esp32mousebridge.h"
+ 
+ #include <Limelight.h>
+ #include "SDL_compat.h"
+@@ -15,6 +16,10 @@
+ 
+ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
+ {
++    // Modifiers may already have reached USB before the last shortcut key.
++    // Release them and suppress held keys until physical up. This also covers
++    // shortcuts invoked from the overlay rather than a physical keyboard.
++    if (m_Esp32Mouse && m_Esp32Mouse->keyboardExclusive()) m_Esp32Mouse->releaseKeyboard();
+     switch (combo) {
+     case KeyComboQuit:
+         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+@@ -97,6 +102,10 @@
+ 
+     case KeyComboPasteText:
+     {
++        if (m_Esp32Mouse && m_Esp32Mouse->keyboardExclusive()) {
++            Session::get()->showStreamingToast(QStringLiteral("ESP32 键盘模式下已屏蔽 Moonlight 文本注入，请使用普通粘贴快捷键"), 3500);
++            break;
++        }
+         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                     "Detected type clipboard text combo");
+ 
+@@ -187,6 +196,8 @@
+         SDL_assert(event->state == SDL_PRESSED);
+         return;
+     }
++
++    if (m_Esp32ShortcutKeysDown.consume(event->keysym.scancode, event->state == SDL_PRESSED)) return;
+ 
+     // Check for our special key combos
+     if ((event->state == SDL_PRESSED) &&
+@@ -219,6 +230,33 @@
+         }
+     }
+ 
++    if (m_Esp32Mouse && m_Esp32Mouse->configured() && event->state == SDL_PRESSED &&
++        (event->keysym.mod & KMOD_CTRL) && (event->keysym.mod & KMOD_ALT) && (event->keysym.mod & KMOD_SHIFT)) {
++        for (unsigned i = 0; i < m_Esp32ShortcutKeys.size(); ++i) {
++            if (m_Esp32ShortcutKeys[i] != SDL_SCANCODE_UNKNOWN && event->keysym.scancode == m_Esp32ShortcutKeys[i]) {
++                m_Esp32ShortcutKeysDown.latch(event->keysym.scancode);
++                performEsp32Action(static_cast<Esp32Action>(i));
++                return;
++            }
++        }
++    }
++
++    // Local shortcut recognition must precede the exclusive USB route. SDL
++    // scancodes are physical HID usages, independent of the keyboard layout.
++    if (m_Esp32Mouse && m_Esp32Mouse->keyboardExclusive()) {
++        unsigned usage = event->keysym.scancode;
++        if ((usage == SDL_SCANCODE_LGUI || usage == SDL_SCANCODE_RGUI) &&
++            event->state == SDL_PRESSED && !isSystemKeyCaptureActive()) return;
++        if (m_SwapWinAltKeys) {
++            if (usage == SDL_SCANCODE_LALT) usage = SDL_SCANCODE_LGUI;
++            else if (usage == SDL_SCANCODE_RALT) usage = SDL_SCANCODE_RGUI;
++            else if (usage == SDL_SCANCODE_LGUI) usage = SDL_SCANCODE_LALT;
++            else if (usage == SDL_SCANCODE_RGUI) usage = SDL_SCANCODE_RALT;
++        }
++        m_Esp32Mouse->handleKeyboard(usage, event->state == SDL_PRESSED, event->keysym.scancode);
++        return;
++    }
++
+     // Set modifier flags
+     modifiers = 0;
+     if (event->keysym.mod & KMOD_CTRL) {
+--- a/app/streaming/input/mouse.cpp
++++ b/app/streaming/input/mouse.cpp
+@@ -82,6 +82,12 @@
+             button = BUTTON_LEFT;
+         else if (button == BUTTON_LEFT)
+             button = BUTTON_RIGHT;
++    }
++
++    // Ownership is decided inside Moonlight, before the native send. Selected
++    // events cannot reach both Sunshine and ESP32 through this entry point.
++    if (routeEsp32MouseButton(button, event->state == SDL_PRESSED)) {
++        return;
+     }
+ 
+     LiSendMouseButtonEvent(event->state == SDL_PRESSED ?
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -55,6 +55,7 @@
+ #define SDL_CODE_FLUSH_TOUCHPAD_FRAME 106
+ #define SDL_CODE_CURSOR_UPDATE 107
+ #define SDL_CODE_FLUSH_CURSOR_VISIBILITY 108
++#define SDL_CODE_ESP32_TOAST 110
+ #if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN) || \
+         defined(HAVE_LINUX_DISPLAY_EVENT_MONITOR)
+ #define SDL_CODE_PROCESS_QT_OVERLAY_EVENTS 109
+@@ -1619,6 +1620,7 @@
+ 
+     m_StreamConfig.fps = m_Preferences->fps;
+     m_StreamConfig.bitrate = m_Preferences->bitrateKbps;
++    m_StreamConfig.videoFecPercentage = m_Preferences->fecPercentage;
+ 
+ #ifndef STEAM_LINK
+     // Opt-in to all encryption features if we detect that the platform
+@@ -2523,6 +2525,11 @@
+ }
+ 
+ // ---- Qt-based overlay menu methods ----
++
++Esp32InputStatus Session::esp32InputStatusForStats() const
++{
++    return m_Esp32StatsReader ? m_Esp32StatsReader() : Esp32InputStatus{};
++}
+ 
+ void Session::showQtOverlayMenu(std::optional<QPoint> pointerGlobalPosition,
+                                 bool closeWhenPointerOutside)
+@@ -2855,6 +2862,31 @@
+ 
+ #endif
+ 
++void Session::queueEsp32Toast(const QString& message)
++{
++    {
++        std::lock_guard<std::mutex> lock(m_Esp32ToastMutex);
++        m_PendingEsp32Toast = message;
++    }
++    // Wake the SDL loop even with the interactive menu disabled. A queued Qt
++    // invocation alone cannot wake its conditional event pump.
++    SDL_Event event{};
++    event.type = SDL_USEREVENT;
++    event.user.code = SDL_CODE_ESP32_TOAST;
++    SDL_PushEvent(&event);
++}
++
++void Session::flushEsp32Toast()
++{
++    if (!m_Toast || !isStreamingWindowVisible()) return;
++    QString message;
++    {
++        std::lock_guard<std::mutex> lock(m_Esp32ToastMutex);
++        message.swap(m_PendingEsp32Toast);
++    }
++    if (!message.isEmpty()) showStreamingToast(message);
++}
++
+ void Session::showStreamingToast(const QString& message, int durationMs)
+ {
+     if (!m_Toast) return;
+@@ -3499,6 +3531,9 @@
+ void Session::handleSdlUserEvent(const SDL_UserEvent& event)
+ {
+     switch (event.code) {
++    case SDL_CODE_ESP32_TOAST:
++        flushEsp32Toast();
++        break;
+     case SDL_CODE_FRAME_READY:
+         if (m_VideoDecoder != nullptr) {
+             m_VideoDecoder->renderFrameOnMainThread();
+@@ -4180,7 +4215,9 @@
+     // Initialize the gamepad code with the effective (post-preflight) capability.
+     // NB: m_InputHandler must be initialized before starting the connection.
+     m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width,
+-                                         m_StreamConfig.height, enablePhysicalDualSenseHaptics);
++                                         m_StreamConfig.height, enablePhysicalDualSenseHaptics,
++                                         m_Computer->name, m_Computer->uuid);
++    m_Esp32StatsReader = m_InputHandler->esp32StatsReader();
+     updateDualSenseHapticsControllerTarget();
+ 
+     // Kick off the async connection thread then return to the caller to pump the event loop
+@@ -4675,6 +4712,7 @@
+     m_MenuPanel = new OverlayMenuPanel();
+     m_MenuButton = nullptr;
+     m_Toast = new OverlayToast();
++    flushEsp32Toast();
+ #ifdef MOONLIGHT_ENABLE_FUNCTION_TESTS
+     // Developer-only harness: Session supplies integration callbacks while
+     // the test class owns the panel, picker, replay scheduler, and cleanup.
+--- a/app/streaming/session.h
++++ b/app/streaming/session.h
+@@ -152,6 +152,8 @@
+         return m_OverlayManager;
+     }
+ 
++    Esp32InputStatus esp32InputStatusForStats() const;
++
+     void flushWindowEvents();
+ 
+     void setShouldExit(bool quitHostApp = false);
+@@ -220,6 +222,10 @@
+     void requestRuntimeBitrateChange(int bitrateKbps);
+     void startRuntimeBitrateWorker();
+     void showStreamingToast(const QString& message, int durationMs = 2000);
++    void queueEsp32Toast(const QString& message);
++    void flushEsp32Toast();
++    std::mutex m_Esp32ToastMutex;
++    QString m_PendingEsp32Toast;
+     void processQtOverlayEvents();
+     void updateFileMappingMenuState();
+     void updateRemoteUsbMenuState();
+@@ -367,6 +373,9 @@
+     QQuickWindow* m_QtWindow;
+     bool m_UnexpectedTermination;
+     SdlInputHandler* m_InputHandler;
++    // Published once before starting the connection/decoder thread. The reader
++    // owns shared atomic transport state and never dereferences m_InputHandler.
++    Esp32StatusReader m_Esp32StatsReader;
+     int m_MouseEmulationRefCount;
+     int m_FlushingWindowEventsRef;
+     QStringList m_LaunchWarnings;
+--- a/app/streaming/video/ffmpeg.cpp
++++ b/app/streaming/video/ffmpeg.cpp
+@@ -4,6 +4,7 @@
+ #include "utils.h"
+ #include "streaming/session.h"
+ #include "streaming/network/bandwidth.h"
++#include "streaming/input/esp32performancestats.h"
+ 
+ #include <h264_stream.h>
+ extern "C" {
+@@ -2193,9 +2194,13 @@
+             addVideoStats(m_LastWndVideoStats, lastTwoWndStats);
+             addVideoStats(m_ActiveWndVideoStats, lastTwoWndStats);
+ 
+-            stringifyVideoStats(lastTwoWndStats,
+-                                Session::get()->getOverlayManager().getOverlayText(Overlay::OverlayDebug),
+-                                Session::get()->getOverlayManager().getOverlayMaxTextLength());
++            auto& overlay = Session::get()->getOverlayManager();
++            auto* buffer = overlay.getOverlayText(Overlay::OverlayDebug);
++            // Preserve the original 1024-byte video statistics capacity. The
++            // enlarged overlay buffer leaves separate room for ESP32 status.
++            stringifyVideoStats(lastTwoWndStats, buffer, 1024);
++            const auto combined = appendEsp32PerformanceStats(buffer, Session::get()->esp32InputStatusForStats());
++            SDL_strlcpy(buffer, combined.c_str(), overlay.getOverlayMaxTextLength());
+             Session::get()->getOverlayManager().setOverlayTextUpdated(Overlay::OverlayDebug);
+         }
+ 
+--- a/app/streaming/video/overlaymanager.h
++++ b/app/streaming/video/overlaymanager.h
+@@ -76,7 +76,7 @@
+         int fontSize;
+         SDL_Color color;
+         SDL_Color bgcolor;
+-        char text[1024];
++        char text[2048];
+         TextAlignment textAlignment;  // 文本对齐方式
+ 
+         TTF_Font* font;          // 普通字体
+--- a/moonlight-common-c/moonlight-common-c/src/Connection.c
++++ b/moonlight-common-c/moonlight-common-c/src/Connection.c
+@@ -278,8 +278,13 @@
+ 
+     memset(&LocalAddr, 0, sizeof(LocalAddr));
+     NegotiatedVideoFormat = 0;
++    VideoFecControlSupported = false;
+     memcpy(&StreamConfig, streamConfig, sizeof(StreamConfig));
+     RemoteAddrString = strdup(serverInfo->address);
++    if (StreamConfig.videoFecPercentage < -2 || StreamConfig.videoFecPercentage > 100) {
++        err = -1;
++        goto Cleanup;
++    }
+ 
+     // The values in RTSP SETUP will be used to populate these.
+     VideoPortNumber = 0;
+--- a/moonlight-common-c/moonlight-common-c/src/ControlStream.c
++++ b/moonlight-common-c/moonlight-common-c/src/ControlStream.c
+@@ -96,6 +96,13 @@
+ static ENetHost* client;
+ static ENetPeer* peer;
+ static PLT_MUTEX enetMutex;
++bool VideoFecControlSupported;
++static PLT_MUTEX fecSummaryMutex;
++static uint32_t fecDataPackets, fecMissingPackets, fecSequence, fecLastFrame;
++static uint8_t fecLastBlock;
++static bool fecHasBlock;
++static uint64_t fecLastSummaryMs;
++
+ static bool usePeriodicPing;
+ 
+ static PLT_THREAD lossStatsThread;
+@@ -566,6 +573,10 @@
+     LbqInitializeLinkedBlockingQueue(&frameFecStatusQueue, 8); // Limits number of frame status reports per periodic ping interval
+     LbqInitializeLinkedBlockingQueue(&asyncCallbackQueue, 30);
+     PltCreateMutex(&enetMutex);
++    PltCreateMutex(&fecSummaryMutex);
++    fecDataPackets = fecMissingPackets = fecSequence = 0;
++    fecHasBlock = false;
++    fecLastSummaryMs = PltGetMillis();
+ 
+     encryptedControlStream = APP_VERSION_AT_LEAST(7, 1, 431);
+ 
+@@ -644,6 +655,7 @@
+     resetCursorReassembly();
+ 
+     PltDeleteMutex(&enetMutex);
++    PltDeleteMutex(&fecSummaryMutex);
+ }
+ 
+ static void queueFrameInvalidationTuple(uint32_t startFrame, uint32_t endFrame) {
+@@ -713,6 +725,20 @@
+             }
+         }
+     }
++}
++
++void connectionRecordFecBlock(uint32_t frame, uint8_t block, uint16_t data, uint16_t received) {
++    if (!VideoFecControlSupported || !data || received > data) return;
++    PltLockMutex(&fecSummaryMutex);
++    if ((!fecHasBlock || frame != fecLastFrame || block != fecLastBlock) &&
++        data <= 1000000U - fecDataPackets) {
++        fecDataPackets += data;
++        fecMissingPackets += data - received;
++        fecLastFrame = frame;
++        fecLastBlock = block;
++        fecHasBlock = true;
++    }
++    PltUnlockMutex(&fecSummaryMutex);
+ }
+ 
+ void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus) {
+@@ -1814,6 +1840,21 @@
+         BbPut32(&byteBuffer, 0); // Timestamp?
+ 
+         while (!PltIsThreadInterrupted(&lossStatsThread)) {
++            if (VideoFecControlSupported && PltGetMillis() - fecLastSummaryMs >= 1000) {
++                SS_FEC_SUMMARY summary;
++                PltLockMutex(&fecSummaryMutex);
++                summary.sequence = BE32(++fecSequence);
++                summary.dataPackets = BE32(fecDataPackets);
++                summary.missingDataPackets = BE32(fecMissingPackets);
++                fecDataPackets = fecMissingPackets = 0;
++                PltUnlockMutex(&fecSummaryMutex);
++                fecLastSummaryMs = PltGetMillis();
++                if (summary.dataPackets && !sendMessageEnet(SS_FEC_SUMMARY_PTYPE, sizeof(summary), &summary,
++                                                           CTRL_CHANNEL_GENERIC, 0, false)) {
++                    ListenerCallbacks.connectionTerminated(LastSocketFail());
++                    return;
++                }
++            }
+             // For Sunshine servers, send the more detailed per-frame FEC messages
+             if (IS_SUNSHINE()) {
+                 PQUEUED_FRAME_FEC_STATUS queuedFrameStatus;
+--- a/moonlight-common-c/moonlight-common-c/src/Limelight-internal.h
++++ b/moonlight-common-c/moonlight-common-c/src/Limelight-internal.h
+@@ -137,6 +137,8 @@
+ void connectionReceivedCompleteFrame(uint32_t frameIndex, bool frameIsLTR);
+ void connectionSawFrame(uint32_t frameIndex);
+ void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus);
++extern bool VideoFecControlSupported;
++void connectionRecordFecBlock(uint32_t frame, uint8_t block, uint16_t data, uint16_t received);
+ int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t channelId, uint32_t flags, bool moreData);
+ void flushInputOnControlStream(void);
+ bool isControlDataInTransit(void);
+--- a/moonlight-common-c/moonlight-common-c/src/Limelight.h
++++ b/moonlight-common-c/moonlight-common-c/src/Limelight.h
+@@ -136,6 +136,10 @@
+     // 0 means "host default" (Sunshine uses 640000 for AC3, 384000 for E-AC3).
+     // Ignored when audioCodec == OPUS.
+     int audioBitrate;
++
++    // RS FEC preference: -2=host default, -1=automatic, 0..100=fixed percentage.
++    // Negotiated only with compatible Sunshine hosts.
++    int videoFecPercentage;
+ } STREAM_CONFIGURATION, *PSTREAM_CONFIGURATION;
+ 
+ // Use this function to zero the stream configuration when allocated on the stack or heap
+--- a/moonlight-common-c/moonlight-common-c/src/Misc.c
++++ b/moonlight-common-c/moonlight-common-c/src/Misc.c
+@@ -126,6 +126,7 @@
+ 
+ void LiInitializeStreamConfiguration(PSTREAM_CONFIGURATION streamConfig) {
+     memset(streamConfig, 0, sizeof(*streamConfig));
++    streamConfig->videoFecPercentage = -2;
+ }
+ 
+ void LiInitializeVideoCallbacks(PDECODER_RENDERER_CALLBACKS drCallbacks) {
+--- a/moonlight-common-c/moonlight-common-c/src/RtpVideoQueue.c
++++ b/moonlight-common-c/moonlight-common-c/src/RtpVideoQueue.c
+@@ -92,6 +92,8 @@
+ 
+ static void reportFinalFrameFecStatus(PRTP_VIDEO_QUEUE queue) {
+     SS_FRAME_FEC_STATUS fecStatus;
++    connectionRecordFecBlock(queue->currentFrameNumber, queue->multiFecCurrentBlockNumber,
++                             queue->bufferDataPackets, queue->receivedDataPackets);
+ 
+     fecStatus.frameIndex = BE32(queue->currentFrameNumber);
+     fecStatus.highestReceivedSequenceNumber = BE16(queue->receivedHighestSequenceNumber);
+@@ -212,7 +214,7 @@
+         // based on the packets we've received (or not) so far. If the number of missing shards exceeds the total
+         // needed shards, there is no hope of recovering the data. The only way we could recover this frame is by
+         // receiving OOS data, which is unlikely because we've not seen any recently from this host.
+-        if (!queue->reportedLostFrame && !queue->receivedOosData) {
++        if (isReferenceFrameInvalidationEnabled() && !queue->reportedLostFrame && !queue->receivedOosData) {
+             // NB: We use totalPackets - neededPackets instead of just bufferParityPackets here because we require
+             // one extra parity shard for recovery if we're in FEC validation mode.
+             if (queue->missingPackets > totalPackets - neededPackets) {
+@@ -247,6 +249,9 @@
+ #else
+     if (queue->receivedDataPackets == queue->bufferDataPackets) {
+ #endif
++        // Include clean blocks in the aggregate denominator, without queueing a report per frame.
++        connectionRecordFecBlock(queue->currentFrameNumber, queue->multiFecCurrentBlockNumber,
++                                 queue->bufferDataPackets, queue->receivedDataPackets);
+         // We've received a full frame with no need for FEC.
+         return 0;
+     }
+@@ -629,11 +634,13 @@
+                     // Notify the host of the loss of this frame
+                     if (!queue->reportedLostFrame) {
+                         notifyFrameLost(queue->currentFrameNumber, false);
+-                        queue->reportedLostFrame = true;
+                     }
+ 
++                    // NB: We reset reportedLostFrame here because we don't want to suppress
++                    // the reporting of the _next_ frame if it's lost.
+                     queue->currentFrameNumber++;
+                     queue->multiFecCurrentBlockNumber = 0;
++                    queue->reportedLostFrame = false;
+                     return RTPF_RET_REJECTED;
+                 }
+             }
+@@ -664,13 +671,16 @@
+ 
+             // Notify the host of the loss of this frame
+             if (!queue->reportedLostFrame) {
+-                notifyFrameLost(queue->currentFrameNumber, false);
+-                queue->reportedLostFrame = true;
++                notifyFrameLost(nvPacket->frameIndex, false);
+             }
+ 
+             // We dropped a block of this frame, so we must skip to the next one.
++            //
++            // NB: We reset reportedLostFrame here because we don't want to suppress
++            // the reporting of the _next_ frame if it's lost.
+             queue->currentFrameNumber = nvPacket->frameIndex + 1;
+             queue->multiFecCurrentBlockNumber = 0;
++            queue->reportedLostFrame = false;
+             return RTPF_RET_REJECTED;
+         }
+ 
+--- a/moonlight-common-c/moonlight-common-c/src/RtspConnection.c
++++ b/moonlight-common-c/moonlight-common-c/src/RtspConnection.c
+@@ -1048,6 +1048,13 @@
+     *val = strtol(valst + 1, NULL, 0);
+ 
+     return true;
++}
++
++// Negotiate only the FEC extension version this client implements.
++static bool supportsVideoFecControl(const char* payload) {
++    uint32_t version = 0;
++    return IS_SUNSHINE() &&
++        parseSdpAttributeToUInt(payload, "x-ss-video[0].fecControlVersion", &version) && version == 1;
+ }
+ 
+ // Perform RTSP Handshake with the streaming server machine as part of the connection process
+@@ -1255,6 +1262,10 @@
+             Limelog("Reference frame invalidation is not supported by this host\n");
+         }
+ 
++        VideoFecControlSupported = supportsVideoFecControl(response.payload);
++        Limelog("Video FEC preference: %d; host control: %s\n", StreamConfig.videoFecPercentage,
++                VideoFecControlSupported ? "supported" : "unsupported (host default)");
++
+         // Look for the Sunshine feature flags in the SDP attributes
+         if (!parseSdpAttributeToUInt(response.payload, "x-ss-general.featureFlags", &SunshineFeatureFlags)) {
+             SunshineFeatureFlags = 0;
+--- a/moonlight-common-c/moonlight-common-c/src/SdpGenerator.c
++++ b/moonlight-common-c/moonlight-common-c/src/SdpGenerator.c
+@@ -347,6 +347,12 @@
+     }
+     snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.packetSize);
+     err |= addAttributeString(&optionHead, "x-nv-video[0].packetSize", payloadStr);
++
++    if (VideoFecControlSupported) {
++        snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.videoFecPercentage);
++        err |= addAttributeString(&optionHead, "x-ml-video.fecPercentage", payloadStr);
++        err |= addAttributeString(&optionHead, "x-ml-video.fecSummaryVersion", "1");
++    }
+ 
+     err |= addAttributeString(&optionHead, "x-nv-video[0].rateControlMode", "4");
+ 
+--- a/moonlight-common-c/moonlight-common-c/src/Video.h
++++ b/moonlight-common-c/moonlight-common-c/src/Video.h
+@@ -54,6 +54,13 @@
+ } SS_PING, *PSS_PING;
+ 
+ // Fields are big-endian
++// FEC-only aggregate summary.
++#define SS_FEC_SUMMARY_PTYPE 0x5510
++typedef struct _SS_FEC_SUMMARY {
++    uint32_t sequence;
++    uint32_t dataPackets;
++    uint32_t missingDataPackets;
++} SS_FEC_SUMMARY;
+ #define SS_FRAME_FEC_PTYPE 0x5502
+ typedef struct _SS_FRAME_FEC_STATUS {
+     uint32_t frameIndex;
+--- a/moonlight-common-c/moonlight-common-c/src/VideoDepacketizer.c
++++ b/moonlight-common-c/moonlight-common-c/src/VideoDepacketizer.c
+@@ -103,9 +103,10 @@
+     // We're dropping frame state now
+     dropStatePending = false;
+ 
+-    if (strictIdrFrameWait || !idrFrameProcessed || waitingForIdrFrame) {
+-        // We'll need an IDR frame now if we're in non-RFI mode, if we've never
+-        // received an IDR frame, or if we explicitly need an IDR frame.
++    if (strictIdrFrameWait || !idrFrameProcessed || waitingForIdrFrame ||
++            (nalChainHead && frameType == FRAME_TYPE_IDR)) {
++        // Request another IDR if the partially processed IDR was dropped too.
++        // Its dependent frames cannot be recovered through RFI alone.
+         waitingForIdrFrame = true;
+     }
+     else {
+--- /dev/null
++++ b/tests/esp32_keyboard_router/main.cpp
+@@ -0,0 +1,118 @@
++#include "../../app/streaming/input/esp32keyboardrouter.h"
++
++#include <algorithm>
++#include <cstdlib>
++#include <iostream>
++#include <set>
++#include <string>
++
++static unsigned checks = 0;
++static void check(bool ok, const char* message)
++{
++    ++checks;
++    if (!ok) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
++}
++
++int main()
++{
++    using Router = Esp32KeyboardRouter;
++    {
++        Esp32LocalShortcutLatch latch;
++        check(!latch.consume(66, true), "ordinary function key can follow its normal route");
++        latch.latch(66);
++        check(latch.consume(66, true), "repeated shortcut down remains local");
++        check(!latch.consume(4, true), "shortcut latch does not consume unrelated keys");
++        check(latch.consume(66, false), "matching shortcut up remains local");
++        check(!latch.consume(66, true), "new press after matching up uses normal route");
++        latch.latch(66);
++        check(latch.consume(66, true), "fresh down after lost up cannot create unmatched native press");
++        check(latch.consume(66, false), "stale shortcut latch clears on physical release");
++        check(!latch.consume(66, true), "normal function key resumes after stale latch clears");
++        check(!latch.consume(999, true), "unknown scancode cannot index shortcut state");
++    }
++    {
++        Router router;
++        auto report = router.handle(224, true, 1);
++        check(report.send && report.modifiers == 1, "left control is independent of normal key slots");
++        report = router.handle(4, true, 1);
++        check(report.send && report.keys[0] == 4 && report.modifiers == 1, "control plus A full state");
++        check(!router.handle(4, true, 1).send, "duplicate/repeat down does not replay");
++        report = router.handle(4, false, 1);
++        check(report.send && report.keys[0] == 0 && report.modifiers == 1, "key up retains modifier");
++        check(router.handle(224, false, 1).modifiers == 0, "modifier released");
++        check(!router.handle(4, false, 1).send, "orphan up suppressed");
++    }
++    {
++        Router router;
++        router.handle(224, true, 1);
++        router.handle(4, true, 1);
++        router.cancel();
++        check(!router.handle(4, true, 1).send, "held key suppressed after local shortcut/focus loss");
++        check(!router.handle(224, false, 1).send, "cancelled modifier up suppressed");
++        check(!router.handle(4, false, 1).send, "cancelled key up suppressed");
++        check(router.handle(4, true, 1).send, "fresh press resumes");
++    }
++    {
++        Router router;
++        check(!router.handle(4, true, 0).send, "offline press blocked");
++        check(!router.handle(4, true, 1).send, "offline hold is not replayed after connection");
++        check(!router.handle(4, false, 1).send, "offline up suppressed after connection");
++        check(router.handle(4, true, 1).send, "fresh online press sent");
++        check(!router.handle(4, false, 2).send, "old release cannot cross connection epochs");
++        auto report = router.handle(5, true, 2);
++        check(report.send && report.keys[0] == 5 && report.keys[1] == 0, "no old hold in new connection report");
++    }
++    {
++        Router router;
++        for (unsigned key = 4; key < 4 + Router::MaxKeys; ++key) {
++            check(router.handle(key, true, 1).send, "sixteen ordinary keys accepted together");
++        }
++        check(!router.handle(20, true, 1).send, "seventeenth key suppressed");
++        for (unsigned key = 224; key < 232; ++key) {
++            check(router.handle(key, true, 1).modifiers == (1u << (key - 223)) - 1,
++                  "all eight modifiers work alongside sixteen ordinary keys");
++        }
++        auto report = router.handle(4, false, 1);
++        check(report.send && report.modifiers == 255, "release preserves modifiers");
++        check(std::find(report.keys.begin(), report.keys.end(), 20) == report.keys.end(),
++              "freed slot does not replay a previously suppressed seventeenth key");
++        router.handle(20, false, 1);
++        check(router.handle(20, true, 1).send, "fresh press can use freed sixteenth slot");
++        router.cancel();
++        check(!router.handle(5, true, 1).send, "focus loss blocks held replay");
++        check(!router.handle(5, false, 2).send, "old hold cannot cross an epoch");
++        check(router.handle(5, true, 2).send, "fresh press resumes after reconnect");
++    }
++    for (unsigned i = 4; i < 100; ++i) {
++        if (i == 50) continue; // Firmware does not expose non-US hash.
++        check(esp32KeyboardCode(i) != nullptr, "supported HID usage maps to protocol");
++    }
++    check(std::string(esp32KeyboardCode(39)) == "Digit0", "number-row zero mapping");
++    check(std::string(esp32KeyboardCode(98)) == "Numpad0", "numpad zero mapping");
++    check(esp32KeyboardCode(232) == nullptr, "unknown modifier rejected");
++    for (unsigned seed : {0x32481u, 0x9aa872u}) {
++        Router router;
++        std::set<unsigned> physical, accepted;
++        unsigned random = seed;
++        for (unsigned n = 0; n < 30000; ++n) {
++            random = random * 1664525u + 1013904223u;
++            const unsigned usage = 4 + (random % 26);
++            const bool down = (random & 0x10000) != 0;
++            if (down) {
++                if (physical.insert(usage).second && accepted.size() < Router::MaxKeys) accepted.insert(usage);
++            } else {
++                physical.erase(usage);
++                accepted.erase(usage);
++            }
++            const auto report = router.handle(usage, down, 1);
++            if (!report.send) continue;
++            std::set<unsigned> seen;
++            for (auto key : report.keys) if (key) {
++                check(seen.insert(key).second, "no duplicate usages");
++                check(physical.count(key) != 0, "every emitted key is physically held");
++            }
++            check(seen == accepted, "full report matches independent sixteen-key state model");
++        }
++    }
++    std::cout << "PASS: " << checks << " keyboard routing checks\n";
++}
+--- /dev/null
++++ b/tests/esp32_mouse_bridge/esp32_mouse_bridge.pro
+@@ -0,0 +1,10 @@
++TEMPLATE = app
++TARGET = esp32_mouse_bridge_test
++CONFIG += console testcase c++17
++CONFIG -= app_bundle
++QT += core network websockets testlib
++SOURCES += main.cpp ../../app/streaming/input/esp32mousebridge.cpp
++SOURCES += ../../app/settings/esp32inputsettings.cpp
++HEADERS += ../../app/streaming/input/esp32mousebridge.h ../../app/streaming/input/esp32mouserouter.h
++HEADERS += ../../app/streaming/input/esp32keyboardrouter.h ../../app/settings/esp32inputsettings.h
++HEADERS += ../../app/streaming/input/esp32inputstatus.h
+--- /dev/null
++++ b/tests/esp32_mouse_bridge/main.cpp
+@@ -0,0 +1,564 @@
++#include "../../app/streaming/input/esp32mousebridge.h"
++#include "../../app/settings/esp32inputsettings.h"
++
++#include <QFile>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QTemporaryDir>
++#include <QSettings>
++#include <QtTest>
++#include <QWebSocket>
++#include <QWebSocketServer>
++
++class BridgeTest : public QObject
++{
++    Q_OBJECT
++
++    QTemporaryDir settingsDirectory;
++
++    QString config(QTemporaryDir& dir, quint16 port, bool keyboard = false)
++    {
++        const auto path = dir.filePath(QStringLiteral("esp32-mouse.json"));
++        QFile file(path);
++        if (!file.open(QIODevice::WriteOnly)) return {};
++        const QJsonObject object{
++            {QStringLiteral("enabled"), true},
++            {QStringLiteral("target_host"), QStringLiteral("test-host")},
++            {QStringLiteral("address"), QStringLiteral("http://localhost:%1").arg(port)},
++            {QStringLiteral("access_key"), QStringLiteral("123456")},
++            {QStringLiteral("keyboard_enabled"), keyboard},
++            {QStringLiteral("buttons"), QJsonArray{"left", "right", "middle", "back", "forward"}},
++        };
++        file.write(QJsonDocument(object).toJson());
++        file.close();
++        return path;
++    }
++
++    static void accept(QWebSocketServer& server, QList<QJsonObject>& messages,
++                       QWebSocket*& peer, bool acknowledge = true, QJsonObject capabilities = {{"protocol", 2}, {"keyboard_nkro", true}, {"keyboard_max_keys", 16}})
++    {
++        QObject::connect(&server, &QWebSocketServer::newConnection, &server,
++                         [&server, &messages, &peer, acknowledge, capabilities] {
++            peer = server.nextPendingConnection();
++            peer->setParent(&server);
++            auto* socket = peer;
++            QObject::connect(socket, &QWebSocket::textMessageReceived, &server,
++                             [socket, &messages, acknowledge, capabilities](const QString& text) {
++                const auto object = QJsonDocument::fromJson(text.toUtf8()).object();
++                messages.append(object);
++                if (acknowledge && object.value("type") == QStringLiteral("hello")) {
++                    auto reply = capabilities;
++                    reply.insert("type", QStringLiteral("macro_status"));
++                    reply.insert("running", false);
++                    socket->sendTextMessage(QString::fromUtf8(QJsonDocument(reply).toJson(QJsonDocument::Compact)));
++                }
++            });
++        });
++    }
++
++    static QList<QJsonArray> mouseStates(const QList<QJsonObject>& messages)
++    {
++        QList<QJsonArray> result;
++        for (const auto& message : messages) {
++            if (message.value("type") == QStringLiteral("mouse_state")) {
++                result.append(message.value("buttons").toArray());
++            }
++        }
++        return result;
++    }
++
++    static QList<QJsonObject> keyboardStates(const QList<QJsonObject>& messages)
++    {
++        QList<QJsonObject> result;
++        for (const auto& message : messages) if (message.value("type") == QStringLiteral("state")) result.append(message);
++        return result;
++    }
++
++private slots:
++    void initTestCase()
++    {
++        QVERIFY(settingsDirectory.isValid());
++        QCoreApplication::setOrganizationName(QStringLiteral("ESP32IntegrationTests"));
++        QCoreApplication::setApplicationName(QStringLiteral("HostProfiles"));
++        QSettings::setDefaultFormat(QSettings::IniFormat);
++        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
++    }
++
++    void hostProfilesAndValidation()
++    {
++        auto values = Esp32InputSettings::load("uuid-one");
++        QVERIFY(!values.value("enabled").toBool());
++        values["enabled"] = true;
++        values["keyboard_enabled"] = true;
++        values["address"] = "lan.worldline233.cloud";
++        values["port"] = 38080;
++        values["access_key"] = "123456";
++        QVERIFY(Esp32InputSettings::save("uuid-one", values).isEmpty());
++        const auto loaded = Esp32InputSettings::load("uuid-one");
++        QCOMPARE(loaded, values);
++        const auto url = Esp32InputSettings::endpoint(loaded);
++        QCOMPARE(url.host(), QStringLiteral("lan.worldline233.cloud"));
++        QCOMPARE(url.port(), 38080);
++        QCOMPARE(url.path(), QStringLiteral("/ws"));
++        QVERIFY(!Esp32InputSettings::load("uuid-two").value("enabled").toBool());
++        values["address"] = "http://user:password@host/";
++        QVERIFY(!Esp32InputSettings::save("uuid-one", values).isEmpty());
++        QCOMPARE(Esp32InputSettings::load("uuid-one"), loaded);
++        for (const auto& invalid : {"ws://host/?key=secret", "ws://host/other", "ws://host/#fragment", "ws://host:80"}) {
++            values = loaded;
++            values["address"] = invalid;
++            QVERIFY(!Esp32InputSettings::save("uuid-one", values).isEmpty());
++        }
++        values = loaded;
++        values["port"] = 80.5;
++        QVERIFY(!Esp32InputSettings::save("uuid-one", values).isEmpty());
++        QVERIFY(!Esp32InputSettings::save("", loaded).isEmpty());
++        QVERIFY(!Esp32InputSettings::save("bad/uuid", loaded).isEmpty());
++        Esp32InputSettings::remove("uuid-one");
++        QVERIFY(!Esp32InputSettings::load("uuid-one").value("enabled").toBool());
++    }
++
++    void keyboardExclusiveFullStatesAndLocalRelease()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort(), true));
++        QVERIFY(bridge.keyboardExclusive());
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++        QVERIFY(bridge.handle(0, true));
++        QTRY_COMPARE(mouseStates(messages).size(), 1);
++        QVERIFY(bridge.handleKeyboard(224, true));
++        QTRY_COMPARE(keyboardStates(messages).size(), 1);
++        QVERIFY(bridge.handleKeyboard(4, true));
++        QTRY_COMPARE(keyboardStates(messages).size(), 2);
++        QCOMPARE(keyboardStates(messages).last().value("modifiers").toArray(), QJsonArray{"ControlLeft"});
++        QCOMPARE(keyboardStates(messages).last().value("keys").toArray(), QJsonArray{"KeyA"});
++        bridge.releaseKeyboard(); // The local exit/uncapture shortcut releases modifiers.
++        QTRY_COMPARE(keyboardStates(messages).size(), 3);
++        QVERIFY(keyboardStates(messages).last().value("modifiers").toArray().isEmpty());
++        QVERIFY(keyboardStates(messages).last().value("keys").toArray().isEmpty());
++        QVERIFY(bridge.handleKeyboard(4, false));
++        QVERIFY(bridge.handleKeyboard(224, false));
++        QVERIFY(bridge.handleKeyboard(104, true)); // Unsupported F13 still blocks native.
++        QTest::qWait(30);
++        QCOMPARE(keyboardStates(messages).size(), 3);
++        // Keyboard-only release must not drop a mouse drag.
++        QCOMPARE(mouseStates(messages).size(), 1);
++        QVERIFY(bridge.handle(0, false));
++        QTRY_COMPARE(mouseStates(messages).size(), 2);
++        QVERIFY(mouseStates(messages).last().isEmpty());
++        QVERIFY(bridge.handleKeyboard(5, true));
++        QTRY_COMPARE(keyboardStates(messages).size(), 4);
++        bridge.releaseAll();
++        QTRY_COMPARE(messages.last().value("type").toString(), QStringLiteral("release_all"));
++        QVERIFY(bridge.handleKeyboard(5, false));
++        QTest::qWait(30);
++        QCOMPARE(keyboardStates(messages).size(), 4);
++    }
++
++    void nkroTwelveKeysAndModifiers()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort(), true));
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++        QCOMPARE(messages.first().value("protocol").toInt(), 2);
++        for (unsigned usage = 4; usage < 16; ++usage) QVERIFY(bridge.handleKeyboard(usage, true));
++        QTRY_COMPARE(keyboardStates(messages).size(), 12);
++        QCOMPARE(keyboardStates(messages).last().value("keys").toArray().size(), 12);
++        QVERIFY(bridge.handleKeyboard(225, true));
++        QTRY_COMPARE(keyboardStates(messages).size(), 13);
++        QCOMPARE(keyboardStates(messages).last().value("modifiers").toArray(), QJsonArray{"ShiftLeft"});
++        QVERIFY(bridge.handleKeyboard(4, false));
++        QTRY_COMPARE(keyboardStates(messages).size(), 14);
++        QCOMPARE(keyboardStates(messages).last().value("keys").toArray().size(), 11);
++        bridge.releaseKeyboard();
++        QTRY_VERIFY(keyboardStates(messages).last().value("keys").toArray().isEmpty());
++        for (unsigned usage = 4; usage < 16; ++usage) bridge.handleKeyboard(usage, false);
++        QVERIFY(bridge.handleKeyboard(225, false));
++        QVERIFY(bridge.handleKeyboard(4, true));
++        QTRY_COMPARE(keyboardStates(messages).last().value("keys").toArray(), QJsonArray{"KeyA"});
++    }
++
++    void incompatibleFirmware_data()
++    {
++        QTest::addColumn<QJsonObject>("capabilities");
++        QTest::newRow("legacy") << QJsonObject{};
++        QTest::newRow("protocol-1") << QJsonObject{{"protocol", 1}, {"keyboard_nkro", true}, {"keyboard_max_keys", 16}};
++        QTest::newRow("missing-nkro") << QJsonObject{{"protocol", 2}, {"keyboard_max_keys", 16}};
++        QTest::newRow("six-key") << QJsonObject{{"protocol", 2}, {"keyboard_nkro", true}, {"keyboard_max_keys", 6}};
++        QTest::newRow("fractional") << QJsonObject{{"protocol", 2}, {"keyboard_nkro", true}, {"keyboard_max_keys", 16.5}};
++        QTest::newRow("wrong-type") << QJsonObject{{"protocol", 2}, {"keyboard_nkro", true}, {"keyboard_max_keys", "16"}};
++    }
++
++    void incompatibleFirmware()
++    {
++        QFETCH(QJsonObject, capabilities);
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer, true, capabilities);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort(), true));
++        // Observe the socket closure after rejecting the incompatible hello.
++        QTRY_VERIFY(peer != nullptr);
++        QTRY_COMPARE(peer->state(), QAbstractSocket::UnconnectedState);
++        QVERIFY(!bridge.ready());
++        QVERIFY(bridge.handleKeyboard(4, true));
++        QVERIFY(bridge.handleKeyboard(4, false));
++        QVERIFY(keyboardStates(messages).isEmpty());
++    }
++
++    void keyboardDisconnectBlocksNativeAndHeldReplay()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort(), true));
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++        QVERIFY(bridge.handleKeyboard(4, true));
++        QTRY_COMPARE(keyboardStates(messages).size(), 1);
++        peer->abort();
++        QTRY_VERIFY(!bridge.ready());
++        QVERIFY(bridge.handleKeyboard(5, true));
++        QVERIFY(bridge.handleKeyboard(4, false));
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 5000);
++        QVERIFY(bridge.handleKeyboard(5, false));
++        QTest::qWait(30);
++        QCOMPARE(keyboardStates(messages).size(), 1);
++        QVERIFY(bridge.handleKeyboard(6, true));
++        QVERIFY(bridge.handleKeyboard(6, false));
++        QTRY_COMPARE(keyboardStates(messages).size(), 3);
++        QCOMPARE(keyboardStates(messages)[1].value("keys").toArray(), QJsonArray{"KeyC"});
++        QVERIFY(keyboardStates(messages).last().value("keys").toArray().isEmpty());
++    }
++
++    void hostUuidLoadsKeyboardOnlyProfile()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        auto values = Esp32InputSettings::load("keyboard-only-uuid");
++        values["enabled"] = true;
++        values["keyboard_enabled"] = true;
++        values["mouse_enabled"] = false;
++        values["address"] = "localhost";
++        values["port"] = server.serverPort();
++        values["access_key"] = "123456";
++        QVERIFY(Esp32InputSettings::save("keyboard-only-uuid", values).isEmpty());
++        {
++            Esp32MouseBridge wrong("same-name", "other-uuid");
++            QVERIFY(!wrong.configured());
++            QVERIFY(!wrong.keyboardExclusive());
++            QVERIFY(!wrong.handleKeyboard(4, true));
++            Esp32MouseBridge bridge("renamed-host", "keyboard-only-uuid");
++            QVERIFY(bridge.keyboardExclusive());
++            QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++            QVERIFY(!bridge.handle(0, true));
++            QVERIFY(!bridge.handle(0, false));
++            QVERIFY(bridge.handleKeyboard(4, true));
++            QVERIFY(bridge.handleKeyboard(4, false));
++            QTRY_COMPARE(keyboardStates(messages).size(), 2);
++            QVERIFY(mouseStates(messages).isEmpty());
++        }
++        Esp32InputSettings::remove("keyboard-only-uuid");
++    }
++
++    void exclusiveKeyboardStaysBlockedWithInvalidConfiguration()
++    {
++        // Simulate a manually damaged stored profile: no valid worker exists,
++        // but exclusive mode must not silently enable native keyboard sends.
++        QSettings settings;
++        settings.setValue("ESP32Hosts/broken-uuid/enabled", true);
++        settings.setValue("ESP32Hosts/broken-uuid/keyboard_enabled", true);
++        settings.sync();
++        Esp32MouseBridge bridge("host", "broken-uuid");
++        QVERIFY(bridge.keyboardExclusive());
++        QVERIFY(!bridge.ready());
++        QVERIFY(!bridge.configured());
++        QVERIFY(bridge.handleKeyboard(4, true));
++        QVERIFY(bridge.handleKeyboard(4, false));
++        Esp32InputSettings::remove("broken-uuid");
++    }
++
++    void shortcutsAndExclusionValidation()
++    {
++        auto values = Esp32InputSettings::load("custom-uuid");
++        values["excluded_keys"] = "a, MetaLeft, f12, A";
++        values["shortcut_pause"] = 1;
++        values["shortcut_reconnect"] = 2;
++        values["shortcut_release"] = 0;
++        QVERIFY(Esp32InputSettings::save("custom-uuid", values).isEmpty());
++        auto stored = Esp32InputSettings::load("custom-uuid");
++        QCOMPARE(stored.value("excluded_keys").toString(), QStringLiteral("KeyA, MetaLeft, F12"));
++        QCOMPARE(stored.value("shortcut_pause").toInt(), 1);
++        QCOMPARE(stored.value("shortcut_release").toInt(), 0);
++        values["shortcut_reconnect"] = 1;
++        QVERIFY(!Esp32InputSettings::save("custom-uuid", values).isEmpty());
++        QCOMPARE(Esp32InputSettings::load("custom-uuid"), stored);
++        values["shortcut_reconnect"] = 2;
++        values["excluded_keys"] = "NotAKey";
++        QVERIFY(!Esp32InputSettings::save("custom-uuid", values).isEmpty());
++        values["excluded_keys"] = "";
++        values["shortcut_pause"] = 13;
++        QVERIFY(!Esp32InputSettings::save("custom-uuid", values).isEmpty());
++        values["shortcut_pause"] = 1.5;
++        QVERIFY(!Esp32InputSettings::save("custom-uuid", values).isEmpty());
++        QCOMPARE(Esp32InputSettings::canonicalKeyCode("0"), QStringLiteral("Digit0"));
++        QCOMPARE(Esp32InputSettings::canonicalKeyCode("F24"), QStringLiteral("F24"));
++        Esp32InputSettings::remove("custom-uuid");
++    }
++
++    void excludedPhysicalKeysNeverReachUsb()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        auto values = Esp32InputSettings::load("excluded-uuid");
++        values["enabled"] = true;
++        values["keyboard_enabled"] = true;
++        values["address"] = "localhost";
++        values["port"] = server.serverPort();
++        values["access_key"] = "123456";
++        values["excluded_keys"] = "A, MetaLeft";
++        values["mouse_buttons"] = 1;
++        QVERIFY(Esp32InputSettings::save("excluded-uuid", values).isEmpty());
++        {
++            Esp32MouseBridge bridge("host", "excluded-uuid");
++            QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++            QVERIFY(!bridge.handle(1, true));
++            QVERIFY(!bridge.handle(1, false));
++            QVERIFY(bridge.handle(0, true));
++            QVERIFY(bridge.handle(0, false));
++            QTRY_COMPARE(mouseStates(messages).size(), 2);
++            QVERIFY(bridge.keyboardExcluded(4));
++            QVERIFY(bridge.handleKeyboard(4, true));
++            QVERIFY(bridge.handleKeyboard(4, false));
++            QVERIFY(bridge.handleKeyboard(227, true));
++            QVERIFY(bridge.handleKeyboard(227, false));
++            QTest::qWait(30);
++            QVERIFY(keyboardStates(messages).isEmpty());
++            // Alt/Win swap must test exclusions against the physical key.
++            QVERIFY(bridge.handleKeyboard(227, true, 226));
++            QTRY_COMPARE(keyboardStates(messages).size(), 1);
++            QCOMPARE(keyboardStates(messages).last().value("modifiers").toArray(), QJsonArray{"MetaLeft"});
++            QVERIFY(bridge.handleKeyboard(227, false, 226));
++            QTRY_COMPARE(keyboardStates(messages).size(), 2);
++            QVERIFY(bridge.handleKeyboard(5, true));
++            QVERIFY(bridge.handleKeyboard(5, false));
++            QTRY_COMPARE(keyboardStates(messages).size(), 4);
++        }
++        Esp32InputSettings::remove("excluded-uuid");
++    }
++
++    void pauseBlocksUsbWithoutNativeFallbackOrHeldReplay()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort(), true));
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++        QVERIFY(bridge.handle(0, true));
++        QVERIFY(bridge.handleKeyboard(4, true));
++        QTRY_COMPARE(mouseStates(messages).size(), 1);
++        QTRY_COMPARE(keyboardStates(messages).size(), 1);
++        QCOMPARE(bridge.setPaused(true), std::uint8_t(0));
++        QTRY_COMPARE(messages.last().value("type").toString(), QStringLiteral("release_all"));
++        QVERIFY(bridge.status().paused);
++        QVERIFY(bridge.ready());
++        QVERIFY(bridge.handle(1, true));
++        QVERIFY(bridge.handleKeyboard(5, true));
++        QTest::qWait(30);
++        QCOMPARE(mouseStates(messages).size(), 1);
++        QCOMPARE(keyboardStates(messages).size(), 1);
++        bridge.setPaused(false);
++        QVERIFY(bridge.handle(1, false));
++        QVERIFY(bridge.handle(0, false));
++        QVERIFY(bridge.handleKeyboard(4, false));
++        QVERIFY(bridge.handleKeyboard(5, false));
++        QTest::qWait(30);
++        QCOMPARE(mouseStates(messages).size(), 1);
++        QCOMPARE(keyboardStates(messages).size(), 1);
++        QVERIFY(bridge.handle(2, true));
++        QVERIFY(bridge.handle(2, false));
++        QVERIFY(bridge.handleKeyboard(6, true));
++        QVERIFY(bridge.handleKeyboard(6, false));
++        QTRY_COMPARE(mouseStates(messages).size(), 3);
++        QTRY_COMPARE(keyboardStates(messages).size(), 3);
++    }
++
++    void manualReconnectAndControlRtt()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort(), true));
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.status().rttMs >= 0, 3000);
++        QCOMPARE(bridge.status().reconnects, 0u);
++        QVERIFY(bridge.handleKeyboard(4, true));
++        QTRY_COMPARE(keyboardStates(messages).size(), 1);
++        bridge.reconnect();
++        QVERIFY(!bridge.ready());
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++        QCOMPARE(bridge.status().reconnects, 1u);
++        QVERIFY(bridge.handleKeyboard(4, false));
++        QTest::qWait(30);
++        QCOMPARE(keyboardStates(messages).size(), 1);
++        QVERIFY(bridge.handleKeyboard(5, true));
++        QVERIFY(bridge.handleKeyboard(5, false));
++        QTRY_COMPARE(keyboardStates(messages).size(), 3);
++    }
++
++    void decoderStatusReaderOutlivesInputFacade()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        QTemporaryDir dir;
++        Esp32StatusReader reader;
++        {
++            Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort(), true));
++            reader = bridge.statusReader();
++            QVERIFY(reader);
++            QTRY_VERIFY_WITH_TIMEOUT(reader().ready, 4000);
++            QVERIFY(reader().enabled);
++            QVERIFY(reader().keyboardUsb);
++            QCOMPARE(reader().mouseButtons, std::uint8_t(31));
++            bridge.setPaused(true);
++            QVERIFY(reader().paused);
++            bridge.setPaused(false);
++            QVERIFY(!reader().paused);
++        }
++        // The decoder may retain a snapshot provider while input is torn down.
++        // Its shared state remains valid and reports the closed connection.
++        QVERIFY(!reader().ready);
++        QCOMPARE(reader().rttMs, -1);
++        QVERIFY(reader().keyboardUsb);
++    }
++
++    void selectedClicksAndSequence()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort()));
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++        for (unsigned i = 0; i < 100; ++i) {
++            QVERIFY(bridge.handle(i % 5, true));
++            QVERIFY(bridge.handle(i % 5, false));
++        }
++        QTRY_COMPARE_WITH_TIMEOUT(mouseStates(messages).size(), 200, 4000);
++        int previous = 0;
++        for (const auto& message : messages) {
++            const int sequence = message.value("seq").toInt();
++            QVERIFY(sequence > previous);
++            previous = sequence;
++        }
++        QCOMPARE(mouseStates(messages).last().size(), 0);
++        QVERIFY(peer != nullptr);
++    }
++
++    void focusReleaseAndNoHeldReplay()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort()));
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++        QVERIFY(bridge.handle(0, true));
++        QTRY_COMPARE(mouseStates(messages).size(), 1);
++        QCOMPARE(bridge.releaseAll(), std::uint8_t(0));
++        QTRY_COMPARE(messages.last().value("type").toString(), QStringLiteral("release_all"));
++        QVERIFY(bridge.handle(0, false));
++        QTest::qWait(30);
++        QCOMPARE(mouseStates(messages).size(), 1);
++        QVERIFY(bridge.handle(0, true));
++        QVERIFY(bridge.handle(0, false));
++        QTRY_COMPARE(mouseStates(messages).size(), 3);
++    }
++
++    void disconnectDoesNotSendOldReleaseToNative()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort()));
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 4000);
++        QVERIFY(bridge.handle(0, true));
++        QTRY_COMPARE(mouseStates(messages).size(), 1);
++        peer->abort();
++        QTRY_VERIFY(!bridge.ready());
++        QVERIFY(bridge.handle(0, false));
++        QVERIFY(!bridge.handle(1, true));
++        QVERIFY(!bridge.handle(1, false));
++        QTRY_VERIFY_WITH_TIMEOUT(bridge.ready(), 5000);
++        QVERIFY(bridge.handle(0, true));
++        QVERIFY(bridge.handle(0, false));
++        QTRY_COMPARE(mouseStates(messages).size(), 3);
++    }
++
++    void upgradeAloneIsNotReady()
++    {
++        QWebSocketServer server(QStringLiteral("test"), QWebSocketServer::NonSecureMode);
++        QVERIFY(server.listen(QHostAddress::LocalHost));
++        QList<QJsonObject> messages;
++        QWebSocket* peer = nullptr;
++        accept(server, messages, peer, false);
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("test-host", "uuid", config(dir, server.serverPort()));
++        QTRY_VERIFY(!messages.isEmpty());
++        QVERIFY(!bridge.ready());
++        QVERIFY(!bridge.handle(0, true));
++        QVERIFY(!bridge.handle(0, false));
++        peer->sendTextMessage(QStringLiteral("{\"type\":\"error\",\"message\":\"test rejection\"}"));
++        QTest::qWait(50);
++        QVERIFY(!bridge.ready());
++    }
++
++    void wrongStreamedHostDoesNotConnect()
++    {
++        QTemporaryDir dir;
++        Esp32MouseBridge bridge("another-host", "uuid", config(dir, 38080));
++        QVERIFY(!bridge.ready());
++        QVERIFY(!bridge.handle(0, true));
++        QVERIFY(!bridge.handle(0, false));
++    }
++};
++
++QTEST_GUILESS_MAIN(BridgeTest)
++#include "main.moc"
+--- /dev/null
++++ b/tests/esp32_mouse_router/esp32_mouse_router.pro
+@@ -0,0 +1,5 @@
++TEMPLATE = app
++TARGET = esp32_mouse_router_test
++CONFIG += console c++17
++CONFIG -= app_bundle qt
++SOURCES += main.cpp
+--- /dev/null
++++ b/tests/esp32_mouse_router/main.cpp
+@@ -0,0 +1,102 @@
++#include "../../app/streaming/input/esp32mouserouter.h"
++
++#include <cstdlib>
++#include <iostream>
++
++static unsigned checks = 0;
++static void check(bool ok, const char* message)
++{
++    ++checks;
++    if (!ok) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
++}
++
++int main()
++{
++    using Router = Esp32MouseRouter;
++    {
++        Router router;
++        auto down = router.handle(0, true, 0, 0x01, true);
++        check(down.consume && !down.sendUsb, "paused selected mouse button does not fall back to native");
++        check(!router.handle(1, true, 0, 0x01, true).consume, "unselected button retains native route while paused");
++        check(router.handle(0, false, 1, 0x01).consume, "paused held release stays suppressed on resume");
++        check(router.handle(0, true, 1, 0x01).sendUsb, "fresh click resumes USB");
++        check(!router.handle(1, false, 1, 0x01).consume, "unselected native release stays native after resume");
++    }
++    {
++        Router router;
++        auto down = router.handle(0, true, 1);
++        auto up = router.handle(0, false, 1);
++        check(down.consume && down.sendUsb && down.usbButtons == 1, "USB press consumes native send");
++        check(up.consume && up.sendUsb && up.usbButtons == 0, "USB release consumes native send");
++    }
++    {
++        Router router;
++        check(!router.handle(0, true, 0).consume, "disconnected press is native");
++        check(!router.handle(0, false, 0).consume, "disconnected release is native");
++        check(router.handle(0, false, 1).consume, "orphan up does not become a native release");
++    }
++    {
++        Router router;
++        check(!router.handle(0, true, 0).consume, "native press before connection");
++        auto up = router.handle(0, false, 1);
++        check(!up.consume && !up.sendUsb, "native hold stays native when connection becomes ready");
++        check(router.handle(0, true, 1).sendUsb, "next complete press can use USB");
++    }
++    {
++        Router router;
++        router.handle(0, true, 1);
++        check(router.handle(0, true, 0).consume, "disconnect while held suppresses repeated down");
++        auto up = router.handle(0, false, 2);
++        check(up.consume && !up.sendUsb, "old hold never crosses a reconnect");
++        check(router.handle(0, true, 2).sendUsb, "fresh press after reconnect uses new epoch");
++    }
++    {
++        Router router;
++        router.handle(0, true, 4);
++        auto duplicate = router.handle(0, true, 4);
++        check(duplicate.consume && !duplicate.sendUsb, "duplicate USB down does not enqueue another report");
++        check(router.cancel() == 0, "USB cancel never releases native buttons");
++        check(!router.handle(0, true, 4).sendUsb, "cancelled hold is not replayed");
++        check(!router.handle(0, false, 4).sendUsb, "cancelled up stays suppressed");
++        check(router.handle(0, true, 4).sendUsb, "released and repressed button resumes");
++    }
++    {
++        Router router;
++        router.handle(1, true, 0);
++        router.handle(4, true, 0);
++        check(router.cancel() == 0x12, "native cancel returns precisely the held native buttons");
++        check(router.cancel() == 0, "repeated cancel does not duplicate native releases");
++        check(router.handle(1, false, 1).consume, "post-cancel up does not reach another route");
++    }
++    {
++        Router router;
++        check(router.handle(0, true, 1, 0x01).sendUsb, "selected left button uses USB");
++        check(!router.handle(1, true, 1, 0x01).consume, "unselected right button stays native");
++        check(router.handle(2, true, 1, 0x05).usbButtons == 0x05, "full USB state retains other selected holds");
++        check(router.handle(0, false, 1).usbButtons == 0x04, "releasing left retains middle");
++        check(!router.handle(1, false, 2).consume, "native right release survives connection change");
++    }
++    {
++        Router router;
++        check(!router.handle(99, true, 1).consume, "unsupported input keeps original routing");
++        for (unsigned button = 0; button < 5; ++button) {
++            auto down = router.handle(button, true, 1);
++            check(down.consume && down.sendUsb && down.usbButtons == (1u << button), "all five HID buttons map independently");
++            check(router.handle(button, false, 1).usbButtons == 0, "all five HID buttons release");
++        }
++    }
++    {
++        Router router;
++        unsigned nativeSends = 0, usbSends = 0;
++        for (unsigned i = 0; i < 10000; ++i) {
++            for (bool down : {true, false}) {
++                const auto decision = router.handle(i % 5, down, 1);
++                if (!decision.consume) ++nativeSends;
++                if (decision.sendUsb) ++usbSends;
++                check(!(decision.sendUsb && !decision.consume), "each event has at most one destination");
++            }
++        }
++        check(nativeSends == 0 && usbSends == 20000, "rapid input keeps every press/release without double routing");
++    }
++    std::cout << "PASS: " << checks << " router assertions\n";
++}
+--- /dev/null
++++ b/tests/esp32_performance_stats/esp32_performance_stats.pro
+@@ -0,0 +1,6 @@
++TEMPLATE = app
++TARGET = esp32_performance_stats_test
++CONFIG += console c++17
++CONFIG -= app_bundle qt
++SOURCES += main.cpp
++HEADERS += ../../app/streaming/input/esp32performancestats.h ../../app/streaming/input/esp32inputstatus.h
+--- /dev/null
++++ b/tests/esp32_performance_stats/main.cpp
+@@ -0,0 +1,73 @@
++#include "../../app/streaming/input/esp32performancestats.h"
++
++#include <cstdlib>
++#include <iostream>
++#include <limits>
++
++static unsigned checks = 0;
++static void check(bool result, const char* message)
++{
++    ++checks;
++    if (!result) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
++}
++static bool has(const std::string& text, const char* needle) { return text.find(needle) != std::string::npos; }
++
++int main()
++{
++    Esp32InputStatus state;
++    auto text = formatEsp32PerformanceStats(state);
++    check(text == "ESP32: off\n", "disabled profile stays compact");
++    state.enabled = state.configured = state.keyboardUsb = true;
++    state.mouseButtons = 31;
++    text = formatEsp32PerformanceStats(state);
++    check(text == "ESP32: disconnected | Keyboard: blocked | Mouse buttons: Moonlight\n",
++          "disconnection shows blocked exclusive keyboard and native mouse fallback");
++    state.ready = true;
++    state.rttMs = 3;
++    text = formatEsp32PerformanceStats(state);
++    check(text == "ESP32: connected | Keyboard: USB | Mouse buttons: USB\n",
++          "connected routes fit a single line without diagnostic fields");
++    state.mouseButtons = 5;
++    state.hasExcludedKeys = true;
++    text = formatEsp32PerformanceStats(state);
++    check(has(text, "Mouse buttons: USB 2/5"), "partial mouse selection remains distinguishable");
++    check(!has(text, "excluded"), "exclusion details stay in host settings");
++    state.paused = true;
++    text = formatEsp32PerformanceStats(state);
++    check(text == "ESP32: paused | Keyboard: blocked | Mouse buttons: paused 2/5\n",
++          "pause shows blocked USB input rather than claiming native keyboard fallback");
++    state.keyboardUsb = false;
++    check(has(formatEsp32PerformanceStats(state), "Keyboard: Moonlight"), "native keyboard route remains visible");
++    state.configured = false;
++    state.ready = false;
++    check(has(formatEsp32PerformanceStats(state), "configuration error"), "bad configuration identified");
++
++    const std::string original = "Video stream: 1920x1080\nIncoming frame rate: 120 FPS\nNetwork latency: 4 ms\n";
++    const auto combined = appendEsp32PerformanceStats(original, state);
++    check(combined.compare(0, original.size(), original) == 0, "existing video/FPS/latency text preserved byte for byte");
++    check(appendEsp32PerformanceStats("FPS: 120", state).find("FPS: 120\nESP32:") == 0, "separate statistics line when old text has no trailing newline");
++    const auto fullBuffer = appendEsp32PerformanceStats(std::string(1023, 'V'), state);
++    check(fullBuffer.substr(0, 1023) == std::string(1023, 'V'), "original full 1024-byte video buffer is not shortened");
++    check(fullBuffer.size() < 2048, "ESP32 has separate capacity in enlarged overlay buffer");
++
++    for (unsigned flags = 0; flags < 64; ++flags) {
++        state.enabled = flags & 1;
++        state.configured = flags & 2;
++        state.ready = flags & 4;
++        state.paused = flags & 8;
++        state.keyboardUsb = flags & 16;
++        state.hasExcludedKeys = flags & 32;
++        state.rttMs = std::numeric_limits<int>::max();
++        state.reconnects = std::numeric_limits<unsigned>::max();
++        for (unsigned buttons = 0; buttons < 32; ++buttons) {
++            state.mouseButtons = buttons;
++            const auto rendered = formatEsp32PerformanceStats(state);
++            check(rendered.size() < 512, "all state combinations fit reserved performance overlay capacity");
++            for (unsigned char c : rendered) check(c < 128, "text supported by existing performance font");
++            check(!has(rendered, "RTT") && !has(rendered, "reconnects"), "diagnostic fields omitted");
++            check(rendered.find('\n') == rendered.size() - 1, "exactly one status line");
++            if (!state.enabled) check(rendered == "ESP32: off\n", "disabled config overrides stale USB flags");
++        }
++    }
++    std::cout << "PASS: " << checks << " performance overlay checks\n";
++}
+--- /dev/null
++++ b/tests/video_network_backport/capability.c
+@@ -0,0 +1,14 @@
++// Exercise the real host capability gate, without opening a connection.
++#include "RtspConnection.c"
++#include <assert.h>
++int AppVersionQuad[4] = {7, 1, 431, -1};
++int main(void) {
++    assert(!supportsVideoFecControl("v=0\r\n"));
++    assert(!supportsVideoFecControl("a=x-ss-video[0].fecControlVersion:0\r\n"));
++    assert(!supportsVideoFecControl("a=x-ss-video[0].fecControlVersion:2\r\n"));
++    assert(supportsVideoFecControl("a=x-ss-video[0].fecControlVersion:1\r\n"));
++    AppVersionQuad[3]=0;
++    assert(!supportsVideoFecControl("a=x-ss-video[0].fecControlVersion:1\r\n"));
++    puts("PASS FEC negotiation: absent, unsupported version, compatible Sunshine and non-Sunshine hosts");
++    return 0;
++}
+--- /dev/null
++++ b/tests/video_network_backport/depacketizer.c
+@@ -0,0 +1,40 @@
++// Exercise production partial-IDR state loss and subsequent recovery decisions.
++#include "VideoDepacketizer.c"
++#include <assert.h>
++static int idrRequests;
++static unsigned invalidStart, invalidEnd;
++void LiRequestIdrFrame(void) { ++idrRequests; }
++void connectionDetectedFrameLoss(uint32_t start, uint32_t end) { invalidStart = start; invalidEnd = end; }
++CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
++static void resetState(void) {
++    nalChainHead = nalChainTail = NULL;
++    nalChainDataLength = 0;
++    decodingFrame = strictIdrFrameWait = waitingForIdrFrame = waitingForRefInvalFrame = false;
++    idrFrameProcessed = true;
++    consecutiveFrameDrops = 0;
++    startFrameNumber = 10;
++    nextFrameNumber = 11;
++    invalidStart = invalidEnd = 0;
++}
++static void partialFrame(int type) {
++    LENTRY_INTERNAL *entry = calloc(1, sizeof(*entry));
++    assert(entry);
++    entry->allocPtr = entry;
++    nalChainHead = nalChainTail = &entry->entry;
++    frameType = type;
++}
++int main(void) {
++    resetState(); partialFrame(FRAME_TYPE_IDR); dropFrameState();
++    assert(waitingForIdrFrame && !waitingForRefInvalFrame && !nalChainHead);
++    resetState(); partialFrame(FRAME_TYPE_PFRAME); notifyFrameLost(12, false);
++    assert(!waitingForIdrFrame && waitingForRefInvalFrame);
++    assert(invalidStart == 10 && invalidEnd == 12 && nextFrameNumber == 13);
++    resetState(); strictIdrFrameWait = true; partialFrame(FRAME_TYPE_PFRAME); dropFrameState();
++    assert(waitingForIdrFrame && !waitingForRefInvalFrame);
++    resetState(); idrFrameProcessed = false; partialFrame(FRAME_TYPE_PFRAME); dropFrameState();
++    assert(waitingForIdrFrame);
++    resetState(); consecutiveFrameDrops = CONSECUTIVE_DROP_LIMIT - 1; dropFrameState();
++    assert(idrRequests == 1 && waitingForIdrFrame && consecutiveFrameDrops == 0);
++    puts("PASS recovery: partial IDR, RFI window, disabled RFI, initial IDR and consecutive-drop recovery");
++    return 0;
++}
+--- /dev/null
++++ b/tests/video_network_backport/rtp_queue.c
+@@ -0,0 +1,55 @@
++// Exercise actual RTP queue loss paths with packet inputs. Transport callbacks are observed locally.
++#include "RtpVideoQueue.c"
++#include <assert.h>
++static bool rfi;
++static int lossCount, speculativeCount;
++static unsigned lostFrame;
++CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
++int AppVersionQuad[4] = {7, 1, 431, -1};
++uint32_t EncryptionFeaturesEnabled;
++static unsigned long long fakeClock = 1000000000;
++bool isReferenceFrameInvalidationEnabled(void) { return rfi; }
++void notifyFrameLost(unsigned int frame, bool speculative) { ++lossCount; lostFrame=frame; speculativeCount += speculative; }
++void connectionRecordFecBlock(uint32_t frame, uint8_t block, uint16_t data, uint16_t received) { (void)frame;(void)block;(void)data;(void)received; }
++void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS status) { (void)status; }
++void connectionSawFrame(uint32_t frame) { (void)frame; }
++void queueRtpPacket(PRTPV_QUEUE_ENTRY packet) { (void)packet; assert(false); }
++uint64_t PltGetMicroseconds(void) { return fakeClock; }
++static void init(PRTP_VIDEO_QUEUE queue) { memset(queue,0,sizeof(*queue)); queue->currentFrameNumber=10; queue->multiFecCapable=true; lossCount=speculativeCount=0; }
++static int packet(PRTP_VIDEO_QUEUE queue, uint32_t frame, unsigned block, unsigned lastBlock) {
++    unsigned char bytes[sizeof(RTP_PACKET)+sizeof(NV_VIDEO_PACKET)] = {0};
++    PRTP_PACKET rtp=(PRTP_PACKET)bytes;
++    PNV_VIDEO_PACKET nv=(PNV_VIDEO_PACKET)(bytes+sizeof(RTP_PACKET));
++    RTPV_QUEUE_ENTRY entry={0};
++    rtp->sequenceNumber=100;
++    nv->frameIndex=LE32(frame);
++    nv->multiFecFlags=0x10;
++    nv->multiFecBlocks=(block<<4)|(lastBlock<<6);
++    nv->fecInfo=LE32(10U<<22);
++    return RtpvAddPacket(queue,rtp,sizeof(bytes),&entry);
++}
++int main(void) {
++    RTP_VIDEO_QUEUE queue;
++    init(&queue); queue.bufferDataPackets=10;queue.bufferParityPackets=2;queue.missingPackets=3;
++    rfi=false;
++    assert(reconstructFrame(&queue)==-1 && lossCount==0 && !queue.reportedLostFrame);
++    rfi=true;
++    assert(reconstructFrame(&queue)==-1 && lossCount==1 && speculativeCount==1 && queue.reportedLostFrame);
++    assert(reconstructFrame(&queue)==-1 && lossCount==1);
++    // Incoming frame's first block is missing: report its frame index and rearm the next frame.
++    init(&queue);
++    assert(packet(&queue,12,1,1)==RTPF_RET_REJECTED);
++    assert(lossCount==1 && lostFrame==12 && queue.currentFrameNumber==13 && !queue.reportedLostFrame);
++    assert(packet(&queue,13,1,1)==RTPF_RET_REJECTED);
++    assert(lossCount==2 && lostFrame==13 && queue.currentFrameNumber==14 && !queue.reportedLostFrame);
++    // A subsequent block of a partially buffered frame was skipped.
++    init(&queue);queue.multiFecLastBlockNumber=2;queue.bufferDataPackets=10;
++    RTPV_QUEUE_ENTRY *pending=calloc(1,sizeof(*pending));assert(pending);
++    pending->packet=calloc(1,sizeof(RTP_PACKET));assert(pending->packet);
++    queue.pendingFecBlockList.head=queue.pendingFecBlockList.tail=pending;queue.pendingFecBlockList.count=1;
++    assert(packet(&queue,10,1,2)==RTPF_RET_REJECTED);
++    assert(lossCount==1 && lostFrame==10 && queue.currentFrameNumber==11 && !queue.reportedLostFrame);
++    assert(queue.pendingFecBlockList.count==0);
++    puts("PASS RTP recovery: RFI capability gate, speculative deduplication, skipped block frame index and consecutive losses");
++    return 0;
++}
+--- /dev/null
++++ b/tests/video_network_backport/sdp.c
+@@ -0,0 +1,48 @@
++// Exercise real SDP generation and stream configuration defaults.
++#include "SdpGenerator.c"
++#include "Misc.c"
++#include <assert.h>
++STREAM_CONFIGURATION StreamConfig;
++CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
++DECODER_RENDERER_CALLBACKS VideoCallbacks;
++AUDIO_RENDERER_CALLBACKS AudioCallbacks;
++int AppVersionQuad[4] = {7, 1, 431, -1};
++int NegotiatedVideoFormat = VIDEO_FORMAT_H264;
++int OriginalVideoBitrate;
++uint32_t EncryptionFeaturesEnabled, EncryptionFeaturesSupported, EncryptionFeaturesRequested;
++int NegotiatedAudioCodec, NegotiatedAudioBitrate;
++bool HighQualitySurroundSupported, ReferenceFrameInvalidationSupported;
++bool AudioEncryptionEnabled, HighQualitySurroundEnabled;
++int AudioPacketDuration = 5;
++uint16_t VideoPortNumber = 47998;
++bool VideoFecControlSupported;
++uint32_t SunshineFeatureFlags;
++uint16_t RtspPortNumber;
++char *RemoteAddrString = "127.0.0.1";
++struct sockaddr_storage RemoteAddr, LocalAddr;
++static char *payload(void) {
++    int length;
++    char *s=getSdpPayloadForStreamConfig(13,&length);
++    assert(s && length>0);
++    return s;
++}
++int main(void) {
++    LiInitializeStreamConfiguration(&StreamConfig);
++    assert(StreamConfig.videoFecPercentage==-2);
++    StreamConfig.width=1920;StreamConfig.height=1080;StreamConfig.fps=60;
++    StreamConfig.bitrate=70000;StreamConfig.packetSize=1392;
++    StreamConfig.audioConfiguration=AUDIO_CONFIGURATION_STEREO;
++    StreamConfig.supportedVideoFormats=VIDEO_FORMAT_H264;
++    RemoteAddr.ss_family=LocalAddr.ss_family=AF_INET;
++    const int modes[]={-2,-1,0,20,100};
++    for(unsigned i=0;i<sizeof(modes)/sizeof(modes[0]);++i) {
++        StreamConfig.videoFecPercentage=modes[i];
++        VideoFecControlSupported=false;
++        char *s=payload();assert(!strstr(s,"x-ml-video.fecPercentage"));free(s);
++        VideoFecControlSupported=true;
++        s=payload();char expected[64];snprintf(expected,sizeof(expected),"x-ml-video.fecPercentage:%d ",modes[i]);
++        assert(strstr(s,expected));assert(strstr(s,"x-ml-video.fecSummaryVersion:1 "));free(s);
++    }
++    puts("PASS FEC SDP: host default, automatic, fixed 0/20/100 and unsupported-host omission");
++    return 0;
++}
+--- /dev/null
++++ b/tests/video_network_backport/summary.c
+@@ -0,0 +1,28 @@
++// Exercise the production FEC aggregation code; no sockets or input are sent.
++#include "ControlStream.c"
++#include <assert.h>
++int main(void) {
++    PltCreateMutex(&fecSummaryMutex);
++    VideoFecControlSupported = false;
++    connectionRecordFecBlock(1, 0, 100, 90);
++    assert(fecDataPackets == 0);
++    VideoFecControlSupported = true;
++    connectionRecordFecBlock(1, 0, 100, 90);
++    connectionRecordFecBlock(1, 0, 100, 90);
++    assert(fecDataPackets == 100 && fecMissingPackets == 10);
++    connectionRecordFecBlock(1, 1, 100, 100);
++    connectionRecordFecBlock(2, 0, 0, 0);
++    connectionRecordFecBlock(2, 0, 1, 2);
++    assert(fecDataPackets == 200 && fecMissingPackets == 10);
++    for (unsigned i = 2; i < 20002; ++i) connectionRecordFecBlock(i, 0, 100, 99);
++    assert(fecDataPackets == 1000000 && fecMissingPackets == 10008);
++    // Summary resets totals, while preserving duplicate suppression across intervals.
++    fecDataPackets = fecMissingPackets = 0;
++    connectionRecordFecBlock(fecLastFrame, fecLastBlock, 100, 99);
++    assert(fecDataPackets == 0);
++    connectionRecordFecBlock(fecLastFrame + 1, 0, 100, 100);
++    assert(fecDataPackets == 100 && fecMissingPackets == 0);
++    PltDeleteMutex(&fecSummaryMutex);
++    puts("PASS FEC aggregation: capability gate, clean/lost blocks, deduplication, invalid counts, cap and interval reset");
++    return 0;
++}

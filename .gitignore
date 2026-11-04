@@ -1,0 +1,4 @@
+upstream/
+build/
+*.dmg
+__pycache__/
