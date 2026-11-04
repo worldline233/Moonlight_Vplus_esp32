@@ -33,6 +33,20 @@ def main() -> None:
     patch = recipe / "esp32-test6.patch"
     if digest(patch) != record["patch_sha256"]:
         raise SystemExit("Patch checksum mismatch")
+
+    # The reviewed common-c originals and their patch hunks were preserved
+    # from a Windows checkout with CRLF. Git checks them out as LF on macOS.
+    # Restore the expected working-tree line endings after checking the clean
+    # pinned revisions. Keep the patch and final byte-for-byte source hashes
+    # unchanged, so this still reproduces the verified Windows test6 inputs.
+    for relative in record["patched_files"]:
+        if relative.startswith("moonlight-common-c/moonlight-common-c/src/"):
+            path = source / relative
+            content = path.read_bytes()
+            windows_content = content.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+            if content != windows_content:
+                path.write_bytes(windows_content)
+
     git("apply", "--check", str(patch))
     git("apply", str(patch))
     for relative, expected in record["patched_files"].items():
