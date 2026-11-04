@@ -1,0 +1,10 @@
+TEMPLATE = app
+TARGET = esp32_mouse_bridge_test
+CONFIG += console testcase c++17
+CONFIG -= app_bundle
+QT += core network websockets testlib
+SOURCES += main.cpp ../../app/streaming/input/esp32mousebridge.cpp
+SOURCES += ../../app/settings/esp32inputsettings.cpp
+HEADERS += ../../app/streaming/input/esp32mousebridge.h ../../app/streaming/input/esp32mouserouter.h
+HEADERS += ../../app/streaming/input/esp32keyboardrouter.h ../../app/settings/esp32inputsettings.h
+HEADERS += ../../app/streaming/input/esp32inputstatus.h

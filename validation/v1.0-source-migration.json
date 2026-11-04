@@ -1,0 +1,36 @@
+{
+  "version": "1.0.0",
+  "checked_at": "2026-11-04",
+  "source_layout": "complete client source with modified common-c/enet/nanors vendored and three pinned unmodified submodules",
+  "import_verification": "all 49 reviewed patch-file hashes matched before release metadata changes",
+  "macos_fix": {
+    "commit": "f018a71a8a2a63377acde15366625e8effeae05b",
+    "source_plist": "NSApplicationUpdateCycleEnabled=false",
+    "packaged_plist": "asserted by macOS workflow; cloud build still required"
+  },
+  "checks": {
+    "version_unit_tests": 7,
+    "windows_mouse_router_assertions": 20041,
+    "windows_keyboard_router_checks": 726125,
+    "windows_performance_overlay_checks": 89132,
+    "windows_qt_network_tests": {
+      "qt": "6.11.1",
+      "passed": 24,
+      "failed": 0
+    },
+    "linux_asan_ubsan_video_network": [
+      "summary",
+      "depacketizer",
+      "rtp_queue",
+      "sdp",
+      "capability"
+    ],
+    "workflow_yaml_and_bash_syntax": "passed",
+    "release_display_version": "1.0.0",
+    "platform_numeric_version": "1.0.0.0"
+  },
+  "limitations": [
+    "Full v1.0 application builds require the new workflows or local platform SDKs",
+    "macOS mouse latency improvement requires hardware comparison"
+  ]
+}

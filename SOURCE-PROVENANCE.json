@@ -1,0 +1,40 @@
+{
+  "product": "Moonlight V+ ESP32",
+  "version": "1.0.0",
+  "upstream_repository": "https://github.com/qiin2333/moonlight-qt",
+  "upstream_version": "6.4.1",
+  "upstream_commit": "31d1d0033b425d31fd24a2c94e87e256619e4f4e",
+  "imported_patch_sha256": "13aa65fa8740ea52b01c9402109782d058af098ed78460ad9f5153325f17f3c3",
+  "vendored_sources": [
+    {
+      "path": "moonlight-common-c/moonlight-common-c",
+      "commit": "8a5d9562f2d557f4acf6e2f722e86502a68e5dd7"
+    },
+    {
+      "path": "moonlight-common-c/moonlight-common-c/enet",
+      "commit": "aca87840b57f045a1f7f9299e4b1b9b8e2a5e2f1"
+    },
+    {
+      "path": "moonlight-common-c/moonlight-common-c/nanors",
+      "commit": "b1e3c22ca0cdc0bb83e3cd6ed1a2fc77869ed99a"
+    }
+  ],
+  "submodules": [
+    {
+      "path": "app/SDL_GameControllerDB",
+      "commit": "8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5"
+    },
+    {
+      "path": "qmdnsengine/qmdnsengine",
+      "commit": "b7a5a9f225d5e14b39f9fd1f905c4f505cf2ee99"
+    },
+    {
+      "path": "third-party/AMF",
+      "commit": "16f7d73e0b45c473e903e46981ed0b91efc4c091"
+    }
+  ],
+  "macos_mouse_fix": {
+    "upstream_commit": "f018a71a8a2a63377acde15366625e8effeae05b",
+    "issue": "https://github.com/moonlight-stream/moonlight-qt/issues/2036"
+  }
+}

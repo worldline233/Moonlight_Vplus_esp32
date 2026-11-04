@@ -1,31 +1,76 @@
-# Moonlight V+ 6.4.1 + ESP32 test6 — macOS 云端构建
+# Moonlight V+ ESP32 v1.0
 
-这是构建配方仓库。GitHub Actions 会下载锁定版本的完整上游源码及子模块，再应用与 Windows test6 一致的补丁，运行输入测试并生成 Mac 安装包。
+基于 Moonlight V+ 6.4.1 的串流客户端，加入按主机配置的 ESP32 USB 键鼠输入。正式版使用 `1.0.0` 作为应用、安装包和构建版本号。
 
-## 上传（Windows 网页操作）
+本仓库保存完整客户端源码，直接从当前提交编译。`app/` 是客户端，`moonlight-common-c/` 包含已修改的公共库源码，`tests/` 保存输入与网络回归测试；无需再下载上游主项目并应用补丁。
 
-1. 在 GitHub 新建 **Public** 仓库，例如 `moonlight-esp32-macos`。可以勾选生成 README，方便进入仓库文件页面。
-2. 解压上传包。打开 `cloud-upload` 文件夹，进入到能看到 `README.md`、`baseline.json`、`.github` 的这一层。
-3. 仓库页面选择 **Add file → Upload files**，把这一层的全部文件和文件夹拖进去，然后 **Commit changes**。上传的是解压后的内容，不是 ZIP，也不要把外层 `cloud-upload` 目录一起套进去。
-4. 确认仓库中存在 `.github/workflows/build-macos.yml`。如果网页没有上传 `.github`，用 **Add file → Create new file**，文件名填写 `.github/workflows/build-macos.yml`，粘贴本地同名文件内容后提交。
+## 功能
 
-## 启动构建
+- ESP32 协议 2，支持 16 个普通键和 8 个独立左右修饰键。
+- 按主机保存设置，键盘和五个鼠标按钮可分别接管，支持排除键与本地快捷键。
+- ESP32 状态显示在原性能统计栏；鼠标移动、滚轮和未接管按钮保留 Moonlight 路径。
+- FEC 设置、兼容主机协商和丢帧恢复的选择性回移植。
+- 加入 macOS 新 SDK 的输入事件同步修复，具体来源见 [更新记录](CHANGELOG.md)。
 
-1. 打开仓库 **Actions** 页面；如果出现启用工作流提示，先启用。
-2. 选择 **Build macOS ESP32 test6 → Run workflow**。
-3. `architecture`：M 系列 Mac 选择 `arm64`；Intel Mac 选择 `x86_64`。
-4. 点击 **Run workflow**，等待任务完成。首次耗时尚未实测；失败时进入红色步骤查看日志。
-5. 进入该次运行页面，下方 **Artifacts** 下载 `Moonlight-ESP32-test6-macOS-...`。下载的是 ZIP，解压后得到 `.dmg`、SHA-256 校验和及源码版本记录。产物保留 7 天。
+使用方法见 [ESP32 输入说明](docs/ESP32.md)。固件是单独的项目；已有兼容协议 2 固件可以继续使用。
 
-工作流仅手动触发，每次只编译选择的一个架构。使用公开仓库的标准 macOS 机器，构建计算免费。当前没有配置 Apple Developer 签名或公证，首次打开可能需要通过 macOS 的“系统设置 → 隐私与安全性”允许打开。
+## 获取与构建源码
 
-## 版本与范围
+```bash
+git clone --recurse-submodules https://github.com/worldline233/Moonlight_Vplus_esp32.git
+cd Moonlight_Vplus_esp32
+```
 
-- 基线：`qiin2333/moonlight-qt`，提交 `31d1d0033b425d31fd24a2c94e87e256619e4f4e`（V+ 6.4.1）。
-- 补丁包括 ESP32 键鼠设置、原性能栏状态显示及 test6 FEC/丢帧恢复回移植。补丁与本地成功构建的 Windows test6 相同。
-- `baseline.json` 固定子模块提交、补丁 SHA-256 和所有 49 个修改后文件的 SHA-256。校验失败时停止构建。
-- 本地已用关闭自动换行转换的干净 Git 检出验证补丁重建、全部 49 个修改后文件哈希及键盘路由测试。准备脚本会处理公共库补丁的 Windows CRLF 换行，以兼容 macOS 检出的 LF 文件。完整 macOS 编译、打包和实际键鼠行为需由云端运行及 Mac 实机确认。
-- 不包含本地 ESP32 密钥、个人连接配置、Windows 安装包或工具链。ESP32 地址和密钥在客户端每台主机的设置中填写。
-- 本仓库只保存构建配方与补丁；完整基线与子模块会在每次构建时下载。遵循随附 GPLv3 许可证及上游依赖各自许可证。
+已经克隆的仓库运行 `git submodule update --init --recursive`。未修改的 SDL 手柄数据库、qmdnsengine 和 AMF 保留为固定提交的子模块；修改后的公共库及 enet、nanors 已随源码入库。来源版本记录在 [SOURCE-PROVENANCE.json](SOURCE-PROVENANCE.json)。
 
-官方参考：[GitHub Actions 计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)、[GitHub 标准运行器](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)、[Moonlight 构建说明](https://github.com/moonlight-stream/moonlight-qt#building-from-source)。
+### GitHub 云端构建
+
+推送源码后，在 Actions 选择 **Build macOS v1.0** 或 **Build Windows v1.0**，点击 **Run workflow**。macOS 可选 `arm64`（M 系列）或 `x86_64`（Intel）；Windows 生成 x64 便携包。
+
+成功后在运行页面的 **Artifacts** 下载。工作流仅手动触发，产物保留 7 天；不自动创建 GitHub Release。macOS 包未配置 Developer ID 签名与公证。
+
+### macOS 本机
+
+准备 Xcode、Python 3、Qt 6.11.1（包含 Multimedia、Image Formats、WebSockets）及 `create-dmg`，将 Qt 的 `bin` 加入 PATH。
+
+```bash
+npm install --global create-dmg@8.1.0
+export CI_VERSION=1.0.0
+bash scripts/test-input.sh .
+lrelease app/languages/qml_zh_CN.ts -qm app/languages/qml_zh_CN.qm
+lrelease app/languages/qml_zh_TW.ts -qm app/languages/qml_zh_TW.qm
+bash scripts/generate-dmg.sh Release
+```
+
+DMG 输出在 `build/installer-Release/`，默认编译本机架构；可通过 `MOONLIGHT_ARCH=arm64` 或 `x86_64` 指定。打包脚本会下载固定版本的 SDL、FFmpeg 等预编译依赖。
+
+### Windows 本机
+
+准备 Python 3、Qt 6.11.1 MSVC 2022 x64、Visual Studio 2022 C++ 工具（含 ATL）、.NET/MSBuild 与 7-Zip。把 Qt、Python 和 7-Zip 加入 PATH，在已初始化的 MSVC x64 命令行运行：
+
+```cmd
+set CI_VERSION=1.0.0
+powershell -NoProfile -ExecutionPolicy Bypass -File setup-deps.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-input.ps1
+lrelease app\languages\qml_zh_CN.ts -qm app\languages\qml_zh_CN.qm
+lrelease app\languages\qml_zh_TW.ts -qm app\languages\qml_zh_TW.qm
+scripts\build-arch.bat Release x64
+```
+
+便携 ZIP 输出在 `build/installer-x64-release/`。Qt SDK、编译工具、预编译依赖及个人配置均不随源码提交。
+
+## 验证
+
+```bash
+python3 -m unittest discover -s tests/derive_version -p 'test_*.py'
+```
+
+macOS 的 `scripts/test-input.sh` 和 Windows 的 `scripts/test-input.ps1` 覆盖鼠标路由、键盘路由、性能栏文字和真实本地 WebSocket 传输。Linux 可运行 `python3 scripts/check-video-network.py`，使用 GCC、ASan 和 UBSan 检查 FEC 与丢帧恢复公共库代码。
+
+macOS 修复在 `app/Info.plist` 设置 `NSApplicationUpdateCycleEnabled=false`，取消 macOS 26+ SDK 默认启用的输入事件与显示刷新同步。云端打包后再次检查应用内该设置。实际鼠标延迟还受屏幕刷新率、V-Sync、网络与视频处理影响，需要实机比较。
+
+## 来源与许可证
+
+上游为 [qiin2333/moonlight-qt](https://github.com/qiin2333/moonlight-qt)，保留的产品说明见 [README.upstream.md](README.upstream.md)。本项目依照 GPLv3 分发，见 [LICENSE](LICENSE)；依赖保留各自许可证。
+
+本分支更新检查指向 `worldline233/Moonlight_Vplus_esp32` 的 Releases。

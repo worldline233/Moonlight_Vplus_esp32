@@ -1,4 +1,4 @@
-name: Build macOS ESP32 test6
+name: Build macOS v1.0
 
 on:
   workflow_dispatch:
@@ -7,9 +7,7 @@ on:
         description: 'Mac CPU: arm64 for Apple Silicon, x86_64 for Intel'
         type: choice
         default: arm64
-        options:
-          - arm64
-          - x86_64
+        options: [arm64, x86_64]
 
 permissions:
   contents: read
@@ -23,29 +21,23 @@ jobs:
     runs-on: ${{ inputs.architecture == 'x86_64' && 'macos-26-intel' || 'macos-26' }}
     timeout-minutes: 90
     env:
-      CI_VERSION: 6.4.1-esp32-input-test6
+      CI_VERSION: '1.0.0'
       MOONLIGHT_ARCH: ${{ inputs.architecture }}
     defaults:
       run:
         shell: bash
     steps:
-      - name: Checkout build recipe
+      - name: Checkout release source
         uses: actions/checkout@v5
         with:
-          path: recipe
-          persist-credentials: false
-
-      - name: Checkout pinned Moonlight baseline
-        uses: actions/checkout@v5
-        with:
-          repository: qiin2333/moonlight-qt
-          ref: 31d1d0033b425d31fd24a2c94e87e256619e4f4e
           submodules: recursive
-          path: upstream
           persist-credentials: false
 
-      - name: Verify source revisions and apply test6 patch
-        run: python3 recipe/prepare-source.py upstream
+      - name: Check version derivation and macOS event-loop setting
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests/derive_version -p 'test_*.py'
+          python3 -c 'import plistlib; p=plistlib.load(open("app/Info.plist", "rb")); assert p["NSApplicationUpdateCycleEnabled"] is False'
 
       - name: Install Qt 6.11.1
         uses: jurplel/install-qt-action@v4
@@ -56,10 +48,9 @@ jobs:
           aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e'
 
       - name: Test input routing, transport and performance stats
-        run: bash recipe/test-input.sh upstream
+        run: bash scripts/test-input.sh .
 
       - name: Generate Chinese translations
-        working-directory: upstream
         run: |
           set -euo pipefail
           lrelease app/languages/qml_zh_CN.ts -qm app/languages/qml_zh_CN.qm
@@ -69,26 +60,26 @@ jobs:
         run: npm install --global create-dmg@8.1.0
 
       - name: Build application and DMG
-        working-directory: upstream
-        run: |
-          set -euo pipefail
-          bash scripts/generate-dmg.sh Release
+        run: bash scripts/generate-dmg.sh Release
 
-      - name: Add checksum and source record
-        working-directory: upstream/build/installer-Release
+      - name: Verify packaged macOS setting and record source
         run: |
           set -euo pipefail
+          python3 -c 'import plistlib; p=plistlib.load(open("build/build-Release/app/Moonlight.app/Contents/Info.plist", "rb")); assert p["NSApplicationUpdateCycleEnabled"] is False'
+          cp SOURCE-PROVENANCE.json build/installer-Release/
+          git rev-parse HEAD > build/installer-Release/SOURCE-COMMIT.txt
+          cd build/installer-Release
           shasum -a 256 ./*.dmg > SHA256SUMS.txt
-          cp "$GITHUB_WORKSPACE/recipe/baseline.json" SOURCE-RECORD.json
 
       - name: Upload Mac installer
         uses: actions/upload-artifact@v6
         with:
-          name: Moonlight-ESP32-test6-macOS-${{ inputs.architecture }}
+          name: Moonlight-VPlus-ESP32-v1.0-macOS-${{ inputs.architecture }}
           path: |
-            upstream/build/installer-Release/*.dmg
-            upstream/build/installer-Release/SHA256SUMS.txt
-            upstream/build/installer-Release/SOURCE-RECORD.json
+            build/installer-Release/*.dmg
+            build/installer-Release/SHA256SUMS.txt
+            build/installer-Release/SOURCE-PROVENANCE.json
+            build/installer-Release/SOURCE-COMMIT.txt
           compression-level: 0
           retention-days: 7
           if-no-files-found: error

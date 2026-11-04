@@ -1,0 +1,3 @@
+name=Moonlight V+ for PC
+icon=moonlight.png
+run=moonlight.sh

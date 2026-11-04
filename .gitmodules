@@ -1,0 +1,9 @@
+[submodule "app/SDL_GameControllerDB"]
+	path = app/SDL_GameControllerDB
+	url = https://github.com/gabomdq/SDL_GameControllerDB.git
+[submodule "qmdnsengine/qmdnsengine"]
+	path = qmdnsengine/qmdnsengine
+	url = https://github.com/cgutman/qmdnsengine.git
+[submodule "third-party/AMF"]
+	path = third-party/AMF
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git

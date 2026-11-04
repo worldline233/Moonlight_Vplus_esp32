@@ -1,0 +1,79 @@
+name: Build Windows v1.0
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      CI_VERSION: '1.0.0'
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Check version derivation
+        run: python -m unittest discover -s tests/derive_version -p "test_*.py"
+
+      - name: Download native dependencies
+        shell: pwsh
+        run: ./setup-deps.ps1
+
+      - name: Install Qt 6.11.1
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.11.1'
+          arch: win64_msvc2022_64
+          modules: 'qtmultimedia qtimageformats qtwebsockets'
+          cache: true
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e'
+
+      - name: Test input routing, transport and performance stats
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`scripts\vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvarsall.bat" AMD64
+          if errorlevel 1 exit /b %errorlevel%
+          powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test-input.ps1
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Generate Chinese translations
+        shell: cmd
+        run: |
+          lrelease app\languages\qml_zh_CN.ts -qm app\languages\qml_zh_CN.qm
+          if errorlevel 1 exit /b %errorlevel%
+          lrelease app\languages\qml_zh_TW.ts -qm app\languages\qml_zh_TW.qm
+          if errorlevel 1 exit /b %errorlevel%
+
+      - name: Build x64 client and portable package
+        shell: cmd
+        run: scripts\build-arch.bat Release x64
+
+      - name: Record checksums and source
+        shell: pwsh
+        run: |
+          $folder = 'build/installer-x64-release'
+          $archives = Get-ChildItem "$folder/Moonlight-VPlus-Portable-x64-*.zip"
+          if (!$archives) { throw 'Portable installer is missing' }
+          $archives | ForEach-Object { "$( (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() )  $($_.Name)" } | Set-Content "$folder/SHA256SUMS.txt"
+          Copy-Item SOURCE-PROVENANCE.json $folder
+          git rev-parse HEAD | Set-Content "$folder/SOURCE-COMMIT.txt"
+
+      - name: Upload Windows portable installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: Moonlight-VPlus-ESP32-v1.0-Windows-x64
+          path: |
+            build/installer-x64-release/Moonlight-VPlus-Portable-x64-*.zip
+            build/installer-x64-release/SHA256SUMS.txt
+            build/installer-x64-release/SOURCE-PROVENANCE.json
+            build/installer-x64-release/SOURCE-COMMIT.txt
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
